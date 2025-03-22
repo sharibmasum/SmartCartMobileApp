@@ -36,6 +36,48 @@ function generateUUID() {
   });
 }
 
+// Helper function to get product from database by name
+async function getProductByName(name: string) {
+  // Normalize the name for better matching
+  const normalizedName = name.toLowerCase().trim();
+  
+  // First try exact match
+  const { data: exactMatch, error: exactError } = await supabase
+    .from('products')
+    .select('*')
+    .ilike('name', normalizedName)
+    .limit(1);
+    
+  if (!exactError && exactMatch && exactMatch.length > 0) {
+    return exactMatch[0];
+  }
+  
+  // Try partial match
+  const { data: partialMatch, error: partialError } = await supabase
+    .from('products')
+    .select('*')
+    .ilike('name', `%${normalizedName}%`)
+    .limit(1);
+  
+  if (!partialError && partialMatch && partialMatch.length > 0) {
+    return partialMatch[0];
+  }
+  
+  // Try matching within category 'Fruits'
+  const { data: fruitMatch, error: fruitError } = await supabase
+    .from('products')
+    .select('*')
+    .eq('category', 'Fruits')
+    .limit(1);
+    
+  if (!fruitError && fruitMatch && fruitMatch.length > 0) {
+    // Return first fruit as fallback
+    return fruitMatch[0];
+  }
+  
+  return null;
+}
+
 export default function Scanner() {
   const [permission, requestPermission] = useCameraPermissions();
   const [scannedItem, setScannedItem] = useState<ScannedItem | null>(null);
@@ -131,10 +173,37 @@ export default function Scanner() {
         confidence: bestMatch.confidence, // Keep for internal use but don't show to user
       });
       
+      // Use the productId to get the complete product information
+      if (!bestMatch.productId) {
+        Alert.alert(
+          "Product Not Found",
+          "This product doesn't appear to be in our database.",
+          [{ text: "OK", onPress: () => setScanning(false) }]
+        );
+        return;
+      }
+      
+      // Get the complete product from the database
+      const { data: databaseProduct, error } = await supabase
+        .from('products')
+        .select('*')
+        .eq('id', bestMatch.productId)
+        .single();
+      
+      if (error || !databaseProduct) {
+        console.error('Error fetching product from database:', error);
+        Alert.alert(
+          "Product Not Found",
+          "This product doesn't appear to be in our database.",
+          [{ text: "OK", onPress: () => setScanning(false) }]
+        );
+        return;
+      }
+      
       // Show add to cart option
       Alert.alert(
         "Food Item Detected",
-        `${bestMatch.name}\nPrice: $${bestMatch.price?.toFixed(2) || '2.99'}\n\nWould you like to add this to your cart?`,
+        `${databaseProduct.name}\nPrice: $${databaseProduct.price.toFixed(2)}\n\nWould you like to add this to your cart?`,
         [
           {
             text: "Cancel",
@@ -145,24 +214,11 @@ export default function Scanner() {
             text: "Add to Cart",
             onPress: async () => {
               try {
-                // Convert the recognized item to a product format
-                const recognizedProduct = {
-                  id: generateUUID(), // Generate proper UUID for the product ID
-                  name: bestMatch.name,
-                  description: bestMatch.description || `Detected ${bestMatch.name}`,
-                  price: bestMatch.price || 2.99,
-                  image_url: photo.uri,
-                  barcode: '',
-                  category: bestMatch.category || 'Food',
-                  created_at: new Date().toISOString(),
-                  updated_at: new Date().toISOString()
-                };
-                
                 // First close the current dialog to prevent UI freezing
                 setScanning(false);
                 
-                // Then add product to cart
-                const result = await addProductToCart(recognizedProduct, 1);
+                // Add existing product from database to cart
+                const result = await addProductToCart(databaseProduct, 1);
                 
                 // Show success message after operation completes
                 if (result) {

@@ -15,6 +15,15 @@ CREATE TABLE IF NOT EXISTS products (
 CREATE INDEX IF NOT EXISTS products_barcode_idx ON products(barcode);
 CREATE INDEX IF NOT EXISTS products_category_idx ON products(category);
 
+-- Enable RLS but allow public read access
+ALTER TABLE products ENABLE ROW LEVEL SECURITY;
+
+-- Create policy to allow everyone to read products
+CREATE POLICY "Allow public read access to products"
+  ON products FOR SELECT
+  TO PUBLIC
+  USING (true);
+
 -- Insert all products, including basic items and fruits 
 INSERT INTO products (name, description, price, barcode, category, image_url)
 VALUES 

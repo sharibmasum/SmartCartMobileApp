@@ -1,65 +1,85 @@
 import React from 'react';
 import { View, Text, Image, StyleSheet, TouchableOpacity } from 'react-native';
-import { MaterialIcons } from '@expo/vector-icons';
 import { CartItem as CartItemType } from '../../types/cart.types';
+import { Theme } from '../../theme';
+import { Feather } from '@expo/vector-icons';
 
 interface CartItemProps {
   item: CartItemType;
-  onRemove: () => void;
-  onUpdateQuantity: (quantity: number) => void;
+  onUpdateQuantity: (itemId: string, quantity: number) => void;
+  onRemove: (itemId: string) => void;
 }
 
-const CartItem: React.FC<CartItemProps> = ({ item, onRemove, onUpdateQuantity }) => {
+const CartItem: React.FC<CartItemProps> = ({ item, onUpdateQuantity, onRemove }) => {
   const { product, quantity } = item;
   
-  const handleIncrement = () => {
-    onUpdateQuantity(quantity + 1);
+  if (!product) {
+    return null;
+  }
+
+  const itemTotal = product.price * quantity;
+  
+  const incrementQuantity = () => {
+    onUpdateQuantity(item.id, quantity + 1);
   };
   
-  const handleDecrement = () => {
+  const decrementQuantity = () => {
     if (quantity > 1) {
-      onUpdateQuantity(quantity - 1);
+      onUpdateQuantity(item.id, quantity - 1);
     } else {
-      onRemove();
+      onRemove(item.id);
     }
   };
   
   return (
     <View style={styles.container}>
-      {/* Product Image */}
-      <View style={styles.imageContainer}>
+      <View style={styles.contentContainer}>
         {product.image_url ? (
-          <Image source={{ uri: product.image_url }} style={styles.image} />
+          <Image 
+            source={{ uri: product.image_url }}
+            style={styles.image}
+          />
         ) : (
-          <View style={styles.placeholderImage}>
-            <MaterialIcons name="image" size={30} color="#ccc" />
+          <View style={[styles.image, styles.placeholderImage]}>
+            <Feather name="image" size={24} color={Theme.colors.secondaryText} />
           </View>
         )}
+        
+        <View style={styles.infoContainer}>
+          <Text style={styles.productName} numberOfLines={1}>{product.name}</Text>
+          
+          <Text style={styles.productPrice}>${product.price.toFixed(2)} / each</Text>
+          
+          <View style={styles.quantityContainer}>
+            <TouchableOpacity 
+              style={styles.quantityButton} 
+              onPress={decrementQuantity}
+            >
+              <Feather name="minus" size={16} color={Theme.colors.text} />
+            </TouchableOpacity>
+            
+            <Text style={styles.quantity}>{quantity}</Text>
+            
+            <TouchableOpacity 
+              style={styles.quantityButton} 
+              onPress={incrementQuantity}
+            >
+              <Feather name="plus" size={16} color={Theme.colors.text} />
+            </TouchableOpacity>
+          </View>
+        </View>
       </View>
       
-      {/* Product Details */}
-      <View style={styles.detailsContainer}>
-        <Text style={styles.productName}>{product.name}</Text>
-        <Text style={styles.productPrice}>${product.price.toFixed(2)}</Text>
-      </View>
-      
-      {/* Quantity Controls */}
-      <View style={styles.quantityContainer}>
-        <TouchableOpacity onPress={handleDecrement} style={styles.quantityButton}>
-          <MaterialIcons name="remove" size={18} color="#666" />
+      <View style={styles.rightContainer}>
+        <TouchableOpacity 
+          style={styles.removeButton}
+          onPress={() => onRemove(item.id)}
+        >
+          <Feather name="trash-2" size={18} color={Theme.colors.error} />
         </TouchableOpacity>
         
-        <Text style={styles.quantityText}>{quantity}</Text>
-        
-        <TouchableOpacity onPress={handleIncrement} style={styles.quantityButton}>
-          <MaterialIcons name="add" size={18} color="#666" />
-        </TouchableOpacity>
+        <Text style={styles.totalPrice}>${itemTotal.toFixed(2)}</Text>
       </View>
-      
-      {/* Remove Button */}
-      <TouchableOpacity onPress={onRemove} style={styles.removeButton}>
-        <MaterialIcons name="delete-outline" size={24} color="#ff6b6b" />
-      </TouchableOpacity>
     </View>
   );
 };
@@ -67,71 +87,79 @@ const CartItem: React.FC<CartItemProps> = ({ item, onRemove, onUpdateQuantity })
 const styles = StyleSheet.create({
   container: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 15,
-    paddingVertical: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
-    backgroundColor: '#fff',
+    backgroundColor: Theme.colors.white,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+    shadowColor: Theme.colors.shadow,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
   },
-  imageContainer: {
-    width: 70,
-    height: 70,
-    borderRadius: 10,
-    overflow: 'hidden',
-    marginRight: 15,
-    backgroundColor: '#f9f9f9',
+  contentContainer: {
+    flex: 1,
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
   },
   image: {
-    width: '100%',
-    height: '100%',
-    resizeMode: 'cover',
+    width: 60,
+    height: 60,
+    borderRadius: 8,
+    backgroundColor: Theme.colors.lightBackground,
   },
   placeholderImage: {
-    width: '100%',
-    height: '100%',
-    alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#f2f2f2',
+    alignItems: 'center',
   },
-  detailsContainer: {
+  infoContainer: {
     flex: 1,
-    marginRight: 10,
+    marginLeft: 12,
   },
   productName: {
     fontSize: 16,
-    fontWeight: '500',
-    marginBottom: 5,
+    fontWeight: '600',
+    color: Theme.colors.text,
+    marginBottom: 2,
   },
   productPrice: {
-    fontSize: 15,
-    color: '#53B175',
-    fontWeight: 'bold',
+    fontSize: 14,
+    color: Theme.colors.secondaryText,
+    marginBottom: 8,
   },
   quantityContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginRight: 15,
   },
   quantityButton: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: '#f3f3f3',
-    alignItems: 'center',
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: Theme.colors.lightBackground,
     justifyContent: 'center',
+    alignItems: 'center',
   },
-  quantityText: {
+  quantity: {
     fontSize: 16,
     fontWeight: '500',
-    marginHorizontal: 10,
+    marginHorizontal: 12,
     minWidth: 20,
     textAlign: 'center',
   },
+  rightContainer: {
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    height: 60,
+  },
   removeButton: {
-    padding: 5,
+    padding: 4,
+  },
+  totalPrice: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: Theme.colors.primary,
   },
 });
 

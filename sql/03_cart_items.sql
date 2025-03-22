@@ -16,32 +16,32 @@ CREATE INDEX IF NOT EXISTS cart_items_product_id_idx ON cart_items(product_id);
 -- RLS Policies for cart_items
 ALTER TABLE cart_items ENABLE ROW LEVEL SECURITY;
 
--- Create a function to check if a cart belongs to the authenticated user
-CREATE OR REPLACE FUNCTION public.cart_belongs_to_auth_user(cart_id UUID)
+-- Create a function to check if a cart belongs to the authenticated user or is a demo cart
+CREATE OR REPLACE FUNCTION public.cart_belongs_to_auth_user_or_demo(cart_id UUID)
 RETURNS BOOLEAN AS $$
   SELECT EXISTS (
     SELECT 1 FROM carts
     WHERE id = cart_id
-    AND user_id = auth.uid()
+    AND (user_id = auth.uid() OR user_id = get_demo_user_id())
   );
 $$ LANGUAGE sql SECURITY DEFINER;
 
--- Policy: Users can view their own cart items
+-- Policy: Users can view their own cart items or demo cart items
 CREATE POLICY "Users can view their own cart items"
   ON cart_items FOR SELECT
-  USING (cart_belongs_to_auth_user(cart_id));
+  USING (cart_belongs_to_auth_user_or_demo(cart_id));
 
--- Policy: Users can insert items into their own carts
+-- Policy: Users can insert items into their own carts or demo carts
 CREATE POLICY "Users can insert items into their own carts"
   ON cart_items FOR INSERT
-  WITH CHECK (cart_belongs_to_auth_user(cart_id));
+  WITH CHECK (cart_belongs_to_auth_user_or_demo(cart_id));
 
--- Policy: Users can update items in their own carts
+-- Policy: Users can update items in their own carts or demo carts
 CREATE POLICY "Users can update items in their own carts"
   ON cart_items FOR UPDATE
-  USING (cart_belongs_to_auth_user(cart_id));
+  USING (cart_belongs_to_auth_user_or_demo(cart_id));
 
--- Policy: Users can delete items from their own carts
+-- Policy: Users can delete items from their own carts or demo carts
 CREATE POLICY "Users can delete items from their own carts"
   ON cart_items FOR DELETE
-  USING (cart_belongs_to_auth_user(cart_id)); 
+  USING (cart_belongs_to_auth_user_or_demo(cart_id)); 

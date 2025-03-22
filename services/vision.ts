@@ -107,92 +107,94 @@ function normalizeLabel(label: string): string {
 }
 
 /**
- * Get product from the database based on recognized name
+ * Find the best product match by name from all available products
  */
-async function getProductFromDatabase(productName: string): Promise<Product | null> {
+async function findBestProductMatch(name: string): Promise<Product | null> {
   try {
-    // Normalize the product name
-    const normalizedProductName = normalizeLabel(productName);
+    const normalizedName = normalizeLabel(name);
+    console.log(`Finding best match for: "${normalizedName}" (from: "${name}")`);
     
-    console.log(`Searching for product: "${normalizedProductName}" (original: "${productName}")`);
-    
-    // First try a direct match by name
-    const exactProducts = await getProducts({ name: normalizedProductName });
-    
-    if (exactProducts && exactProducts.length > 0) {
-      console.log(`Direct match found in database for "${normalizedProductName}"`);
-      return exactProducts[0];
+    // Get all products
+    const allProducts = await getProducts();
+    if (!allProducts || allProducts.length === 0) {
+      console.log('No products available in database');
+      return null;
     }
     
-    // Try case-insensitive matching by checking if any product name contains our normalized product name
-    const allProducts = await getProducts({});
+    // Try exact match first (case insensitive)
+    const exactMatch = allProducts.find(
+      p => normalizeLabel(p.name) === normalizedName
+    );
     
-    if (allProducts && allProducts.length > 0) {
-      // First look for exact matches
-      const exactMatch = allProducts.find(product => 
-        product.name.toLowerCase() === normalizedProductName);
-      
-      if (exactMatch) {
-        console.log(`Exact name match found for "${normalizedProductName}"`);
-        return exactMatch;
-      }
-      
-      // Then look for substring matches
-      const containsMatches = allProducts.filter(product => {
-        const productNameLower = product.name.toLowerCase();
-        return productNameLower.includes(normalizedProductName) || 
-               normalizedProductName.includes(productNameLower);
+    if (exactMatch) {
+      console.log(`Found exact match: "${exactMatch.name}"`);
+      return exactMatch;
+    }
+    
+    // Try to find products containing the search term or search term containing product name
+    let containsMatches = allProducts.filter(p => {
+      const productName = normalizeLabel(p.name);
+      return productName.includes(normalizedName) || normalizedName.includes(productName);
+    });
+    
+    // If we have multiple matches, sort by closest match (preferring shorter names)
+    if (containsMatches.length > 1) {
+      containsMatches = containsMatches.sort((a, b) => {
+        // Prefer products whose names are contained within the search term
+        const aInSearch = normalizedName.includes(normalizeLabel(a.name));
+        const bInSearch = normalizedName.includes(normalizeLabel(b.name));
+        
+        if (aInSearch && !bInSearch) return -1;
+        if (!aInSearch && bInSearch) return 1;
+        
+        // Otherwise prefer closer length matches
+        const aDiff = Math.abs(a.name.length - normalizedName.length);
+        const bDiff = Math.abs(b.name.length - normalizedName.length);
+        return aDiff - bDiff;
       });
       
-      if (containsMatches.length > 0) {
-        console.log(`Substring match found: "${containsMatches[0].name}" matches "${normalizedProductName}"`);
-        return containsMatches[0];
-      }
-      
-      // Try matching by words
-      const words = normalizedProductName.split(/\s+/).filter(word => word.length > 3);
+      console.log(`Found multiple partial matches, best is: "${containsMatches[0].name}"`);
+      return containsMatches[0];
+    } else if (containsMatches.length === 1) {
+      console.log(`Found one partial match: "${containsMatches[0].name}"`);
+      return containsMatches[0];
+    }
+    
+    // Try matching individual words (but only for multi-word labels)
+    if (normalizedName.includes(' ')) {
+      const words = normalizedName.split(/\s+/).filter(w => w.length > 3);
       for (const word of words) {
-        // Skip common words that aren't useful for product identification
-        if (['food', 'fresh', 'ripe', 'juicy', 'sweet', 'product', 'item', 'natural'].includes(word.toLowerCase())) {
-          continue;
-        }
+        // Skip common words
+        if (['food', 'fresh', 'ripe', 'juicy', 'sweet'].includes(word)) continue;
         
-        const wordMatch = allProducts.find(product => 
-          product.name.toLowerCase().includes(word)
+        const wordMatches = allProducts.filter(p => 
+          normalizeLabel(p.name).includes(word)
         );
         
-        if (wordMatch) {
-          console.log(`Word match found: "${wordMatch.name}" matches word "${word}" from "${normalizedProductName}"`);
-          return wordMatch;
-        }
-      }
-      
-      // Try matching by category
-      if (normalizedProductName.includes('fruit')) {
-        const fruitProducts = allProducts.filter(product => 
-          product.category.toLowerCase() === 'fruit');
-        
-        if (fruitProducts.length > 0) {
-          console.log(`Category match found: using first item in "Fruit" category`);
-          return fruitProducts[0];
-        }
-      }
-      
-      if (normalizedProductName.includes('vegetable')) {
-        const vegetableProducts = allProducts.filter(product => 
-          product.category.toLowerCase() === 'vegetable');
-        
-        if (vegetableProducts.length > 0) {
-          console.log(`Category match found: using first item in "Vegetable" category`);
-          return vegetableProducts[0];
+        if (wordMatches.length > 0) {
+          console.log(`Found word match for "${word}": "${wordMatches[0].name}"`);
+          return wordMatches[0];
         }
       }
     }
     
-    console.log(`No specific match found for "${normalizedProductName}"`);
+    // Try category matches as a last resort
+    if (normalizedName.includes('fruit')) {
+      const fruitProducts = allProducts.filter(p => 
+        p.category.toLowerCase() === 'fruits'
+      );
+      
+      if (fruitProducts.length > 0) {
+        console.log(`Using category match from Fruits: "${fruitProducts[0].name}"`);
+        return fruitProducts[0];
+      }
+    }
+    
+    console.log(`No matches found for "${normalizedName}"`);
     return null;
+    
   } catch (error) {
-    console.error(`Error getting product from database for "${productName}":`, error);
+    console.error(`Error finding product match for "${name}":`, error);
     return null;
   }
 }
@@ -223,19 +225,6 @@ function createRecognizedItem(product: Product, confidence: number, label: strin
   
   console.log(`Added match: ${product.name} from "${label}"`);
   return item;
-}
-
-/**
- * Process a label from the Vision API to find a matching product
- */
-async function processVisionLabel(label: string, confidence: number, source: string): Promise<RecognizedFoodItem | null> {
-  if (isFood(label)) {
-    const product = await getProductFromDatabase(label);
-    if (product) {
-      return createRecognizedItem(product, confidence, `${source}: ${label}`);
-    }
-  }
-  return null;
 }
 
 /**
@@ -315,21 +304,94 @@ export async function recognizeFoodWithVision(base64Image: string): Promise<Reco
       });
     }
     
-    // Check for best guess labels
-    let bestGuessLabel = '';
-    if (data.responses[0].webDetection?.bestGuessLabels?.[0]?.label) {
-      bestGuessLabel = data.responses[0].webDetection.bestGuessLabels[0].label;
+    // Store possible matches with their confidence scores
+    const possibleMatches: {name: string, confidence: number, source: string}[] = [];
+    
+    // Process best guess labels first (these are usually the most accurate)
+    const bestGuessLabels = data.responses[0]?.webDetection?.bestGuessLabels;
+    if (bestGuessLabels && bestGuessLabels.length > 0 && bestGuessLabels[0]?.label) {
+      const bestGuessLabel = bestGuessLabels[0].label;
       console.log(`Vision API best guess: "${bestGuessLabel}"`);
+      
+      // First try exact match with best guess
+      const product = await findBestProductMatch(bestGuessLabel);
+      if (product) {
+        console.log(`Found product match for best guess "${bestGuessLabel}": "${product.name}"`);
+        
+        // We have a complete product object from the database that matches the Product interface
+        return {
+          items: [{
+            name: product.name,
+            price: product.price,
+            category: product.category,
+            productId: product.id,
+            description: product.description,
+            image_url: product.image_url
+          }],
+          rawResponse: data
+        };
+      }
+      
+      // If no direct match for best guess, add it to possible matches with high confidence
+      if (isFood(bestGuessLabel)) {
+        possibleMatches.push({
+          name: bestGuessLabel,
+          confidence: 0.95, // Assign high confidence to best guess
+          source: 'best_guess'
+        });
+      }
     }
     
-    // Initialize results array
+    // Add high-confidence label annotations
+    if (data.responses[0].labelAnnotations) {
+      data.responses[0].labelAnnotations
+        .filter(label => label.score > 0.7 && isFood(label.description))
+        .slice(0, 5) // Only use top 5 high-confidence labels
+        .forEach(label => {
+          possibleMatches.push({
+            name: label.description,
+            confidence: label.score,
+            source: 'label'
+          });
+        });
+    }
+    
+    // Add web entities with high confidence
+    if (data.responses[0].webDetection?.webEntities) {
+      data.responses[0].webDetection.webEntities
+        .filter(entity => entity.score > 0.7 && entity.description && isFood(entity.description))
+        .slice(0, 3) // Only use top 3 web entities
+        .forEach(entity => {
+          possibleMatches.push({
+            name: entity.description!,
+            confidence: entity.score,
+            source: 'web_entity'
+          });
+        });
+    }
+    
+    // Sort by confidence (descending)
+    possibleMatches.sort((a, b) => b.confidence - a.confidence);
+    
+    console.log('Possible matches sorted by confidence:');
+    possibleMatches.forEach(match => {
+      console.log(`- ${match.name} (${match.confidence.toFixed(2)}) from ${match.source}`);
+    });
+    
+    // Try to find products for each possible match
     const recognizedItems: RecognizedFoodItem[] = [];
     
-    // First, try to match the best guess label directly
-    if (bestGuessLabel && isFood(bestGuessLabel)) {
-      const product = await getProductFromDatabase(bestGuessLabel);
+    // Try each possible match in order
+    for (const match of possibleMatches) {
+      const product = await findBestProductMatch(match.name);
       if (product) {
-        recognizedItems.push(createRecognizedItem(product, 0.98, `best guess: ${bestGuessLabel}`));
+        recognizedItems.push(createRecognizedItem(
+          product,
+          match.confidence,
+          `${match.source}: ${match.name}`
+        ));
+        
+        // Return on first match
         return {
           items: recognizedItems.map(item => ({
             ...item,
@@ -337,51 +399,6 @@ export async function recognizeFoodWithVision(base64Image: string): Promise<Reco
           })),
           rawResponse: data
         };
-      }
-    }
-    
-    // If best guess didn't match, try with top label annotations
-    if (data.responses[0].labelAnnotations) {
-      // Sort by confidence score
-      const sortedLabels = [...data.responses[0].labelAnnotations].sort((a, b) => b.score - a.score);
-      
-      // Only try the top 3 labels with highest confidence
-      for (let i = 0; i < Math.min(3, sortedLabels.length); i++) {
-        const label = sortedLabels[i];
-        const item = await processVisionLabel(label.description, label.score, "label");
-        if (item) {
-          recognizedItems.push(item);
-          return {
-            items: recognizedItems.map(item => ({
-              ...item,
-              confidence: undefined
-            })),
-            rawResponse: data
-          };
-        }
-      }
-    }
-    
-    // If still no match, try with web entities
-    if (data.responses[0].webDetection?.webEntities) {
-      const webEntities = data.responses[0].webDetection.webEntities;
-      
-      // Only try the top 3 web entities
-      for (let i = 0; i < Math.min(3, webEntities.length); i++) {
-        const entity = webEntities[i];
-        if (!entity.description) continue;
-        
-        const item = await processVisionLabel(entity.description, entity.score, "web entity");
-        if (item) {
-          recognizedItems.push(item);
-          return {
-            items: recognizedItems.map(item => ({
-              ...item,
-              confidence: undefined
-            })),
-            rawResponse: data
-          };
-        }
       }
     }
     

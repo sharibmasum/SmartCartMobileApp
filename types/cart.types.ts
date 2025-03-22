@@ -2,10 +2,10 @@ import { Product } from './product.types';
 
 export interface CartItem {
   id: string;
-  product_id: string;
   cart_id: string;
+  product_id: string;
   quantity: number;
-  product: Product;
+  product: Product | null;
   created_at: string;
   updated_at: string;
 }
@@ -13,10 +13,11 @@ export interface CartItem {
 export interface Cart {
   id: string;
   user_id: string;
-  status: 'active' | 'completed' | 'abandoned';
+  status: 'active' | 'completed' | 'cancelled';
   created_at: string;
   updated_at: string;
   checkout_at: string | null;
+  payment_method?: string;
   items: CartItem[];
 }
 

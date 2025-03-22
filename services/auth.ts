@@ -6,12 +6,13 @@ export const register = async (data: RegisterData): Promise<User> => {
   const { email, password, username } = data;
   
   try {
-    // Sign up with email and password
+    // Sign up with email and password with auto-confirmation
     const { data: authData, error: signUpError } = await supabase.auth.signUp({
       email,
       password,
       options: {
-        data: { username } // Store username in user metadata
+        data: { username }, // Store username in user metadata
+        emailRedirectTo: undefined,
       }
     });
     

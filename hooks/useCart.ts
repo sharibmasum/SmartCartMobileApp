@@ -9,23 +9,51 @@ import { Product } from '../types/product.types';
 const CART_STORAGE_KEY = '@SmartCart:cartData';
 const CART_LAST_SYNC_KEY = '@SmartCart:lastSync';
 
+// Helper function to check if a string is a valid UUID
+function isValidUUID(uuid: string): boolean {
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  return uuidPattern.test(uuid);
+}
+
+// Helper function to generate a valid UUID v4
+function generateUUID(): string {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+
 // Hook for managing cart state and operations
 export const useCart = (userId: string) => {
+  // Check if userId is valid UUID format, if not use a default one
+  const safeUserId = isValidUUID(userId) ? userId : '550e8400-e29b-41d4-a716-446655440000';
+  
+  // Check if we're using the demo user ID
+  const isDemoUser = safeUserId === '550e8400-e29b-41d4-a716-446655440000';
+  
   const [cart, setCart] = useState<Cart | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastSynced, setLastSynced] = useState<Date | null>(null);
   const initialLoadDone = useRef(false);
+  const cartIdRef = useRef<string | null>(null);
 
   // Save cart to AsyncStorage for offline persistence
   const persistCart = useCallback(async (cartData: Cart | null) => {
     if (!cartData) return;
     
     try {
+      // Store the cartId for reference
+      if (cartData.id) {
+        cartIdRef.current = cartData.id;
+      }
+      
       await AsyncStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cartData));
       const now = new Date();
       await AsyncStorage.setItem(CART_LAST_SYNC_KEY, now.toISOString());
       setLastSynced(now);
+      console.log(`Cart saved to storage: ${cartData.items.length} items`);
     } catch (err) {
       console.error('Error saving cart to AsyncStorage:', err);
     }
@@ -38,7 +66,15 @@ export const useCart = (userId: string) => {
       const lastSync = await AsyncStorage.getItem(CART_LAST_SYNC_KEY);
       
       if (storedCart) {
-        setCart(JSON.parse(storedCart));
+        const parsedCart = JSON.parse(storedCart) as Cart;
+        setCart(parsedCart);
+        
+        // Store the cartId for reference
+        if (parsedCart.id) {
+          cartIdRef.current = parsedCart.id;
+        }
+        
+        console.log(`Loaded cart from storage: ${parsedCart.items.length} items`);
       }
       
       if (lastSync) {
@@ -54,10 +90,37 @@ export const useCart = (userId: string) => {
 
   // Load cart data from backend
   const loadCart = useCallback(async (forceRefresh = false) => {
-    if (!userId) return;
+    if (!safeUserId) return;
     
     try {
       setLoading(true);
+      
+      // For demo user, always prefer storage first
+      if (isDemoUser) {
+        const hasPersistedCart = await loadPersistedCart();
+        
+        if (!hasPersistedCart) {
+          // Create a new empty cart for demo user
+          const demoCart: Cart = {
+            id: generateUUID(),
+            user_id: safeUserId,
+            status: 'active',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            checkout_at: null,
+            items: []
+          };
+          
+          setCart(demoCart);
+          cartIdRef.current = demoCart.id;
+          await persistCart(demoCart);
+        }
+        
+        setError(null);
+        initialLoadDone.current = true;
+        setLoading(false);
+        return;
+      }
       
       // Try to load from AsyncStorage first if not forcing refresh
       if (!forceRefresh && !initialLoadDone.current) {
@@ -74,11 +137,12 @@ export const useCart = (userId: string) => {
         }
       }
       
-      // Load from backend
-      const cartData = await getActiveCart(userId);
+      // Load from backend for authenticated users
+      const cartData = await getActiveCart(safeUserId);
       
       if (cartData) {
         setCart(cartData);
+        cartIdRef.current = cartData.id;
         // Persist to AsyncStorage
         await persistCart(cartData);
       }
@@ -86,8 +150,8 @@ export const useCart = (userId: string) => {
       setError(null);
       initialLoadDone.current = true;
     } catch (err) {
-      setError('Failed to load cart');
       console.error('Error loading cart:', err);
+      setError(isDemoUser ? null : 'Failed to load cart');
       
       // Fall back to persisted data if backend load fails
       if (!initialLoadDone.current) {
@@ -96,18 +160,18 @@ export const useCart = (userId: string) => {
     } finally {
       setLoading(false);
     }
-  }, [userId, persistCart, loadPersistedCart]);
+  }, [safeUserId, persistCart, loadPersistedCart, isDemoUser]);
 
   // Add product to cart
   const addProductToCart = useCallback(async (product: Product, quantity = 1) => {
-    if (!userId) return null;
+    if (!safeUserId) return null;
     
     try {
       setLoading(true);
       
       // Validate product data and provide defaults for required fields
       const validatedProduct: Product = {
-        id: product.id || `temp_${Date.now()}`,
+        id: isValidUUID(product.id) ? product.id : generateUUID(),
         name: product.name || 'Unknown Product',
         description: product.description || '',
         price: typeof product.price === 'number' ? product.price : 0,
@@ -118,7 +182,69 @@ export const useCart = (userId: string) => {
         updated_at: product.updated_at || new Date().toISOString()
       };
       
-      const item = await addToCart(userId, validatedProduct, quantity);
+      // For demo user, handle cart locally
+      if (isDemoUser) {
+        // Make sure we have a cart
+        if (!cart) {
+          await loadCart();
+          if (!cart) {
+            // If still no cart, create one
+            const newCart: Cart = {
+              id: generateUUID(),
+              user_id: safeUserId,
+              status: 'active',
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+              checkout_at: null,
+              items: []
+            };
+            setCart(newCart);
+            cartIdRef.current = newCart.id;
+          }
+        }
+        
+        if (cart) {
+          // Check if product is already in cart
+          const existingItemIndex = cart.items.findIndex(item => 
+            item.product_id === validatedProduct.id
+          );
+          
+          const updatedCart = { ...cart };
+          
+          if (existingItemIndex >= 0) {
+            // Update existing item
+            updatedCart.items[existingItemIndex].quantity += quantity;
+            updatedCart.items[existingItemIndex].updated_at = new Date().toISOString();
+            updatedCart.updated_at = new Date().toISOString();
+          } else {
+            // Add new item
+            const newItem: CartItem = {
+              id: generateUUID(),
+              product_id: validatedProduct.id,
+              cart_id: cart.id,
+              quantity,
+              product: validatedProduct,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            };
+            updatedCart.items.push(newItem);
+            updatedCart.updated_at = new Date().toISOString();
+          }
+          
+          // Update state and storage
+          setCart(updatedCart);
+          await persistCart(updatedCart);
+          
+          // Return the added/updated item
+          const itemIndex = existingItemIndex >= 0 ? existingItemIndex : updatedCart.items.length - 1;
+          return updatedCart.items[itemIndex];
+        }
+        
+        return null;
+      }
+      
+      // Regular flow for authenticated users
+      const item = await addToCart(safeUserId, validatedProduct, quantity);
       
       // Refresh cart after adding item
       await loadCart(true);
@@ -133,7 +259,7 @@ export const useCart = (userId: string) => {
         try {
           const updatedCart = { ...cart };
           const validatedProduct: Product = {
-            id: product.id || `temp_${Date.now()}`,
+            id: isValidUUID(product.id) ? product.id : generateUUID(),
             name: product.name || 'Unknown Product', 
             description: product.description || '',
             price: typeof product.price === 'number' ? product.price : 0,
@@ -152,9 +278,9 @@ export const useCart = (userId: string) => {
             // Update existing item
             updatedCart.items[existingItemIndex].quantity += quantity;
           } else {
-            // Add new item
+            // Add new item with valid UUID
             const newItem: CartItem = {
-              id: `temp_${Date.now()}`,
+              id: generateUUID(),
               product_id: validatedProduct.id,
               cart_id: updatedCart.id,
               quantity,
@@ -176,12 +302,25 @@ export const useCart = (userId: string) => {
     } finally {
       setLoading(false);
     }
-  }, [userId, loadCart, cart, persistCart]);
+  }, [safeUserId, loadCart, cart, persistCart, isDemoUser]);
 
   // Remove item from cart
   const removeItem = useCallback(async (cartItemId: string) => {
     try {
       setLoading(true);
+      
+      // For demo user, handle locally
+      if (isDemoUser && cart) {
+        const updatedCart = { ...cart };
+        updatedCart.items = updatedCart.items.filter(item => item.id !== cartItemId);
+        updatedCart.updated_at = new Date().toISOString();
+        
+        setCart(updatedCart);
+        await persistCart(updatedCart);
+        return true;
+      }
+      
+      // Regular flow for authenticated users
       const result = await removeCartItem(cartItemId);
       
       if (result) {
@@ -207,12 +346,40 @@ export const useCart = (userId: string) => {
     } finally {
       setLoading(false);
     }
-  }, [loadCart, cart, persistCart]);
+  }, [loadCart, cart, persistCart, isDemoUser]);
 
   // Update item quantity
   const updateItemQuantity = useCallback(async (cartItemId: string, quantity: number) => {
     try {
       setLoading(true);
+      
+      // For demo user, handle locally
+      if (isDemoUser && cart) {
+        const updatedCart = { ...cart };
+        const itemIndex = updatedCart.items.findIndex(item => item.id === cartItemId);
+        
+        if (itemIndex >= 0) {
+          if (quantity <= 0) {
+            // Remove the item if quantity is 0 or negative
+            updatedCart.items = updatedCart.items.filter(item => item.id !== cartItemId);
+          } else {
+            // Update the quantity
+            updatedCart.items[itemIndex].quantity = quantity;
+            updatedCart.items[itemIndex].updated_at = new Date().toISOString();
+          }
+          
+          updatedCart.updated_at = new Date().toISOString();
+          setCart(updatedCart);
+          await persistCart(updatedCart);
+          
+          // Return the updated item or null if removed
+          return quantity <= 0 ? null : updatedCart.items[itemIndex];
+        }
+        
+        return null;
+      }
+      
+      // Regular flow for authenticated users
       const updatedItem = await updateCartItemQuantity(cartItemId, quantity);
       
       // Refresh cart after updating item
@@ -246,7 +413,7 @@ export const useCart = (userId: string) => {
     } finally {
       setLoading(false);
     }
-  }, [loadCart, cart, persistCart]);
+  }, [loadCart, cart, persistCart, isDemoUser]);
 
   // Checkout and complete the cart
   const checkout = useCallback(async (paymentMethod: string = 'credit_card') => {
@@ -254,6 +421,39 @@ export const useCart = (userId: string) => {
     
     try {
       setLoading(true);
+      
+      // For demo user, simulate checkout locally
+      if (isDemoUser) {
+        const completedCart: Cart = {
+          ...cart,
+          status: 'completed',
+          checkout_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        };
+        
+        // Clear cart storage
+        await AsyncStorage.removeItem(CART_STORAGE_KEY);
+        await AsyncStorage.removeItem(CART_LAST_SYNC_KEY);
+        
+        // Create new empty cart
+        const newCart: Cart = {
+          id: generateUUID(),
+          user_id: safeUserId,
+          status: 'active',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          checkout_at: null,
+          items: []
+        };
+        
+        setCart(newCart);
+        cartIdRef.current = newCart.id;
+        await persistCart(newCart);
+        
+        return true;
+      }
+      
+      // Regular flow for authenticated users
       const result = await checkoutCart(cart.id, paymentMethod);
       
       if (result) {
@@ -276,7 +476,7 @@ export const useCart = (userId: string) => {
     } finally {
       setLoading(false);
     }
-  }, [cart, loadCart]);
+  }, [cart, loadCart, persistCart, safeUserId, isDemoUser]);
 
   // Calculate cart totals
   const getCartTotals = useCallback(() => {
@@ -290,6 +490,10 @@ export const useCart = (userId: string) => {
     }
 
     const subtotal = cart.items.reduce((acc, item) => {
+      if (!item.product || typeof item.product.price !== 'number') {
+        console.warn('Invalid product in cart item:', item);
+        return acc;
+      }
       return acc + (item.product.price * item.quantity);
     }, 0);
     
@@ -312,6 +516,20 @@ export const useCart = (userId: string) => {
     try {
       setLoading(true);
       
+      // For demo user, just clear locally
+      if (isDemoUser) {
+        const updatedCart = { 
+          ...cart, 
+          items: [],
+          updated_at: new Date().toISOString()
+        };
+        
+        setCart(updatedCart);
+        await persistCart(updatedCart);
+        return true;
+      }
+      
+      // Regular flow for authenticated users
       // Remove all items one by one from the backend
       const removePromises = cart.items.map(item => removeCartItem(item.id));
       await Promise.all(removePromises);
@@ -335,7 +553,7 @@ export const useCart = (userId: string) => {
     } finally {
       setLoading(false);
     }
-  }, [cart, loadCart, persistCart]);
+  }, [cart, loadCart, persistCart, isDemoUser]);
 
   // Sync cart with backend (can be called manually)
   const syncCart = useCallback(async () => {
