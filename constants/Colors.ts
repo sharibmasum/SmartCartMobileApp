@@ -24,3 +24,34 @@ export const Colors = {
     tabIconSelected: tintColorDark,
   },
 };
+
+// App color palette
+export const colors = {
+  primary: '#007AFF',
+  secondary: '#F5A623',
+  background: '#FFFFFF',
+  surface: '#F8F8F8',
+  error: '#FF3B30',
+  text: '#000000',
+  textSecondary: '#8E8E93',
+  disabled: '#C7C7CC',
+  placeholder: '#8E8E93',
+  divider: '#E5E5EA',
+  success: '#4CD964',
+  warning: '#FF9500',
+  info: '#5AC8FA',
+};
+
+// Function to get color with opacity
+export const getColorWithOpacity = (colorHex: string, opacity: number) => {
+  // Ensure opacity is between 0 and 1
+  const safeOpacity = Math.max(0, Math.min(1, opacity));
+  
+  // Extract the RGB part of the color
+  const rgbColor = colorHex.substring(1);
+  
+  // Convert opacity to hex
+  const alpha = Math.round(safeOpacity * 255).toString(16).padStart(2, '0');
+  
+  return `#${rgbColor}${alpha}`;
+};
