@@ -101,8 +101,8 @@ console.log('Initializing Supabase client with URL:', supabaseUrl);
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     storage: CustomStorageAdapter,
-    autoRefreshToken: false,
-    persistSession: false,
+    autoRefreshToken: true,
+    persistSession: true,
     detectSessionInUrl: false,
   },
 });

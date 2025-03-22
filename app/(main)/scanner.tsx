@@ -15,6 +15,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useCart } from '../../hooks/useCart';
 import { recognizeFoodWithVision } from '../../services/vision';
 import { supabase } from '../../services/supabase';
+import { logout } from '../../services/auth';
 
 // Define interfaces for our state
 interface ScannedItem {
@@ -253,6 +254,17 @@ export default function Scanner() {
     router.push('/(main)/cart');
   };
 
+  // Handle logout
+  const handleLogout = async () => {
+    try {
+      await logout();
+      router.replace('/(auth)/login');
+    } catch (error) {
+      console.error('Logout error:', error);
+      Alert.alert('Error', 'Failed to log out. Please try again.');
+    }
+  };
+
   if (permission === undefined) {
     return <View style={styles.container}><Text>Requesting camera permission...</Text></View>;
   }
@@ -265,11 +277,19 @@ export default function Scanner() {
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" />
       
-      {/* Cart Button */}
-      <TouchableOpacity style={styles.cartButton} onPress={goToCart}>
-        <Text style={styles.cartButtonText}>View Cart</Text>
-        <MaterialIcons name="shopping-cart" size={24} color="#000" />
-      </TouchableOpacity>
+      <View style={styles.topBar}>
+        {/* Logout Button */}
+        <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
+          <MaterialIcons name="logout" size={24} color="#000" />
+          <Text style={styles.logoutButtonText}>Logout</Text>
+        </TouchableOpacity>
+        
+        {/* Cart Button */}
+        <TouchableOpacity style={styles.cartButton} onPress={goToCart}>
+          <Text style={styles.cartButtonText}>View Cart</Text>
+          <MaterialIcons name="shopping-cart" size={24} color="#000" />
+        </TouchableOpacity>
+      </View>
 
       {/* Detected Item */}
       {scannedItem && (
@@ -340,13 +360,31 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#fff',
   },
+  topBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginHorizontal: 20,
+    marginTop: 20,
+  },
+  logoutButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFB19C',
+    padding: 10,
+    borderRadius: 25,
+  },
+  logoutButtonText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#000',
+    marginLeft: 5,
+  },
   cartButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#B19CFF',
-    marginHorizontal: 20,
-    marginTop: 20,
     padding: 15,
     borderRadius: 25,
   },
