@@ -63,6 +63,9 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "googleCloudVisionApiKey": "YOUR_API_KEY_HERE"
     }
   }
 }

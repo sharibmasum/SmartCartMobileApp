@@ -13,26 +13,15 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { router } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useCart } from '../../hooks/useCart';
-
-// Mock user ID and product for demo
-const DEMO_USER_ID = '123456';
-const DEMO_PRODUCT = {
-  id: 'p001',
-  name: 'Banana Bundle - Large',
-  description: 'Organic bananas, bundle of 5',
-  price: 2.99,
-  image_url: 'https://via.placeholder.com/150',
-  barcode: '123456789',
-  category: 'Fruits',
-  in_stock: true,
-  created_at: new Date().toISOString(),
-  updated_at: new Date().toISOString()
-};
+import { recognizeFoodWithVision } from '../../services/vision';
+import { supabase } from '../../services/supabase';
 
 // Define interfaces for our state
 interface ScannedItem {
   name: string;
   detected: boolean;
+  price?: number;
+  confidence?: number;
 }
 
 export default function Scanner() {
@@ -41,10 +30,32 @@ export default function Scanner() {
   const [scanning, setScanning] = useState(false);
   const [flash, setFlash] = useState(false);
   const [facing, setFacing] = useState<'back' | 'front'>('back');
-  const cameraRef = useRef(null);
+  const cameraRef = useRef<any>(null);
+  const [userId, setUserId] = useState<string | null>(null);
+  
+  // Get the current user ID
+  useEffect(() => {
+    const getUserId = async () => {
+      const { data, error } = await supabase.auth.getSession();
+      if (error) {
+        console.error('Error getting user session:', error);
+        return;
+      }
+      
+      if (data?.session?.user) {
+        setUserId(data.session.user.id);
+      } else {
+        // For development, use a UUID that you know has proper permissions
+        console.log('No authenticated user, using demo ID');
+        setUserId('550e8400-e29b-41d4-a716-446655440000');
+      }
+    };
+    
+    getUserId();
+  }, []);
   
   // Get cart functionality from our hook
-  const { addProductToCart, loading: cartLoading } = useCart(DEMO_USER_ID);
+  const { addProductToCart, loading: cartLoading } = useCart(userId || '');
 
   useEffect(() => {
     (async () => {
@@ -54,29 +65,72 @@ export default function Scanner() {
     })();
   }, [permission, requestPermission]);
 
+  const takePicture = async () => {
+    if (!cameraRef.current) return null;
+    
+    try {
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 0.8,
+        base64: true,
+      });
+      return photo;
+    } catch (error) {
+      console.error('Error taking picture:', error);
+      return null;
+    }
+  };
+
   const handleScan = async () => {
-    // Simulating a scan
+    if (!userId) {
+      Alert.alert("Authentication Error", "Please sign in to use this feature.");
+      return;
+    }
+    
     setScanning(true);
     
     try {
-      // Placeholder for Google Vision API integration
-      // In a real implementation, you would:
-      // 1. Take a picture with camera
-      // 2. Send the image to Google Vision API
-      // 3. Process the response to identify the food item
+      // Take a picture with the camera
+      const photo = await takePicture();
       
-      // Simulating API call delay
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      if (!photo || !photo.base64) {
+        throw new Error('Failed to capture image');
+      }
       
+      // Send the image to Google Vision API for food recognition
+      const recognitionResult = await recognizeFoodWithVision(photo.base64);
+      
+      if (!recognitionResult || !recognitionResult.items || recognitionResult.items.length === 0) {
+        Alert.alert("Not Recognized", "Couldn't identify any food item. Please try again.");
+        setScanning(false);
+        return;
+      }
+      
+      // Check if we're using mock data
+      if (recognitionResult.isMocked) {
+        console.log("Using mocked data because API key is invalid");
+        // Optionally alert the user that mock data is being used
+        Alert.alert(
+          "Using Demo Mode",
+          "Your API key appears to be invalid. Using demo data for testing. To use real scanning, please update your Google Cloud Vision API key in your .env file.",
+          [{ text: "OK" }]
+        );
+      }
+      
+      // Get the highest confidence food item
+      const bestMatch = recognitionResult.items[0];
+      
+      // Set the scanned item state
       setScannedItem({
-        name: DEMO_PRODUCT.name,
+        name: bestMatch.name,
         detected: true,
+        price: bestMatch.price || 2.99, // Default price if not available
+        confidence: bestMatch.confidence,
       });
       
       // Show add to cart option
       Alert.alert(
-        "Item Detected",
-        `${DEMO_PRODUCT.name}\nPrice: $${DEMO_PRODUCT.price.toFixed(2)}\n\nWould you like to add this to your cart?`,
+        "Food Item Detected",
+        `${bestMatch.name}\nConfidence: ${(bestMatch.confidence * 100).toFixed(1)}%\nPrice: $${bestMatch.price?.toFixed(2) || '2.99'}\n\nWould you like to add this to your cart?`,
         [
           {
             text: "Cancel",
@@ -86,16 +140,35 @@ export default function Scanner() {
             text: "Add to Cart",
             onPress: async () => {
               try {
-                await addProductToCart(DEMO_PRODUCT, 1);
+                if (!userId) {
+                  throw new Error('No user ID available');
+                }
+                
+                // Convert the recognized item to a product format
+                const recognizedProduct = {
+                  id: `vision_${Date.now()}`,
+                  name: bestMatch.name,
+                  description: `Detected with ${(bestMatch.confidence * 100).toFixed(1)}% confidence`,
+                  price: bestMatch.price || 2.99,
+                  image_url: photo.uri,
+                  barcode: '',
+                  category: bestMatch.category || 'Food',
+                  created_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString()
+                };
+                
+                await addProductToCart(recognizedProduct, 1);
                 Alert.alert("Success", "Item added to cart!");
               } catch (error) {
-                Alert.alert("Error", "Failed to add item to cart.");
+                console.error('Error adding to cart:', error);
+                Alert.alert("Error", "Failed to add item to cart. Please make sure you're signed in.");
               }
             }
           }
         ]
       );
     } catch (error) {
+      console.error('Vision API error:', error);
       Alert.alert("Error", "Failed to scan item. Please try again.");
     } finally {
       setScanning(false);

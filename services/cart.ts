@@ -4,6 +4,11 @@ import { Product } from '../types/product.types';
 
 // Get active cart for the current user
 export const getActiveCart = async (userId: string): Promise<Cart | null> => {
+  if (!userId) {
+    console.error('No user ID provided to getActiveCart');
+    return null;
+  }
+  
   // First, check if there's an active cart
   const { data: cartData, error: cartError } = await supabase
     .from('carts')
@@ -19,22 +24,41 @@ export const getActiveCart = async (userId: string): Promise<Cart | null> => {
     return null;
   }
   
-  // If no active cart exists, create one
+  // If no active cart exists, try to create one
   if (!cartData) {
-    const { data: newCart, error: createError } = await supabase
-      .from('carts')
-      .insert([
-        { user_id: userId, status: 'active' }
-      ])
-      .select()
-      .single();
-    
-    if (createError) {
-      console.error('Error creating active cart:', createError);
+    try {
+      // Get current user session first to ensure we're authenticated
+      const { data: session } = await supabase.auth.getSession();
+      
+      // Only proceed if we have a valid session
+      if (!session?.session) {
+        console.error('Cannot create cart: No authenticated session');
+        return null;
+      }
+      
+      const { data: newCart, error: createError } = await supabase
+        .from('carts')
+        .insert([
+          { user_id: userId, status: 'active' }
+        ])
+        .select()
+        .single();
+      
+      if (createError) {
+        // Check if this is an RLS error
+        if (createError.code === '42501') {
+          console.error('Row-level security prevented cart creation. Make sure the user is authenticated and has proper permissions.');
+        } else {
+          console.error('Error creating active cart:', createError);
+        }
+        return null;
+      }
+      
+      return { ...newCart, items: [] } as Cart;
+    } catch (error) {
+      console.error('Exception creating cart:', error);
       return null;
     }
-    
-    return { ...newCart, items: [] } as Cart;
   }
   
   // Get cart items for the active cart

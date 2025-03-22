@@ -9,7 +9,10 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "test": "jest --watchAll",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "test:vision": "node ./scripts/run-vision-test.js",
+    "test:products": "npx babel-node ./scripts/test-product-search.js --extensions .ts,.js",
+    "db:populate-fruits": "node ./scripts/populate-products.js"
   },
   "jest": {
     "preset": "jest-expo"
@@ -20,6 +23,7 @@
     "@react-navigation/bottom-tabs": "^7.2.0",
     "@react-navigation/native": "^7.0.14",
     "@supabase/supabase-js": "^2.49.1",
+    "dotenv": "^16.4.7",
     "expo": "~52.0.40",
     "expo-barcode-scanner": "^13.0.1",
     "expo-blur": "~14.0.3",
@@ -39,6 +43,7 @@
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "react-native": "0.76.7",
+    "react-native-dotenv": "^3.4.11",
     "react-native-gesture-handler": "~2.20.2",
     "react-native-paper": "^5.13.1",
     "react-native-reanimated": "~3.16.1",
@@ -51,6 +56,7 @@
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
+    "@babel/node": "^7.26.0",
     "@types/jest": "^29.5.12",
     "@types/react": "~18.3.12",
     "@types/react-test-renderer": "^18.3.0",
