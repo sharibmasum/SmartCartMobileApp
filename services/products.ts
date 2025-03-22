@@ -1,27 +1,15 @@
 import { supabase } from './supabase';
 import { Product, ProductSearchParams } from '../types/product.types';
 
-// Get a product by barcode
-export const getProductByBarcode = async (barcode: string): Promise<Product | null> => {
-  const { data, error } = await supabase
-    .from('products')
-    .select('*')
-    .eq('barcode', barcode)
-    .single();
-  
-  if (error) {
-    console.error('Error fetching product by barcode:', error);
-    return null;
-  }
-  
-  return data as Product;
-};
-
 // Get products with optional filtering
 export const getProducts = async (params?: ProductSearchParams): Promise<Product[]> => {
   let query = supabase.from('products').select('*');
   
   if (params) {
+    if (params.id) {
+      query = query.eq('id', params.id);
+    }
+    
     if (params.barcode) {
       query = query.eq('barcode', params.barcode);
     }
@@ -45,20 +33,16 @@ export const getProducts = async (params?: ProductSearchParams): Promise<Product
   return data as Product[];
 };
 
+// Get a product by barcode
+export const getProductByBarcode = async (barcode: string): Promise<Product | null> => {
+  const products = await getProducts({ barcode });
+  return products.length > 0 ? products[0] : null;
+};
+
 // Get product by ID
 export const getProductById = async (id: string): Promise<Product | null> => {
-  const { data, error } = await supabase
-    .from('products')
-    .select('*')
-    .eq('id', id)
-    .single();
-  
-  if (error) {
-    console.error('Error fetching product by ID:', error);
-    return null;
-  }
-  
-  return data as Product;
+  const products = await getProducts({ id });
+  return products.length > 0 ? products[0] : null;
 };
 
 // Get product categories

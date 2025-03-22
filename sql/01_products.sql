@@ -15,9 +15,10 @@ CREATE TABLE IF NOT EXISTS products (
 CREATE INDEX IF NOT EXISTS products_barcode_idx ON products(barcode);
 CREATE INDEX IF NOT EXISTS products_category_idx ON products(category);
 
--- Optional: Add some sample products
+-- Insert all products, including basic items and fruits 
 INSERT INTO products (name, description, price, barcode, category, image_url)
 VALUES 
+  -- Basic products
   ('Apple', 'Fresh red apple', 0.99, '123456789', 'Fruits', 'https://example.com/apple.jpg'),
   ('Banana', 'Yellow banana bunch', 1.29, '234567890', 'Fruits', 'https://example.com/banana.jpg'),
   ('Milk', 'Whole milk 1 gallon', 3.49, '345678901', 'Dairy', 'https://example.com/milk.jpg'),
@@ -28,4 +29,10 @@ VALUES
   ('Pasta', 'Spaghetti, 16 oz', 1.79, '890123456', 'Grains', 'https://example.com/pasta.jpg'),
   ('Tomatoes', 'Roma tomatoes, 1 lb', 2.49, '901234567', 'Vegetables', 'https://example.com/tomatoes.jpg'),
   ('Cheese', 'Cheddar cheese block', 4.99, '012345678', 'Dairy', 'https://example.com/cheese.jpg')
-ON CONFLICT (barcode) DO NOTHING; 
+ON CONFLICT (barcode) DO UPDATE SET
+  name = EXCLUDED.name,
+  description = EXCLUDED.description,
+  price = EXCLUDED.price,
+  category = EXCLUDED.category,
+  image_url = EXCLUDED.image_url,
+  updated_at = now(); 

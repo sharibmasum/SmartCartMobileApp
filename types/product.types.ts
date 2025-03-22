@@ -11,6 +11,7 @@ export interface Product {
 }
 
 export interface ProductSearchParams {
+  id?: string;
   barcode?: string;
   name?: string;
   category?: string;

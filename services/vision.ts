@@ -16,8 +16,6 @@ if (GOOGLE_CLOUD_VISION_API_KEY) {
   // Check if key has the correct format (Google API keys start with AIza)
   if (!GOOGLE_CLOUD_VISION_API_KEY.replace(/["']/g, '').startsWith('AIza')) {
     console.error('ERROR: Your API key doesn\'t match the expected format for Google Cloud API keys.');
-    console.error('Google Cloud API keys typically start with "AIza". Please check your key in the Google Cloud Console.');
-    console.error('Your key appears to be a different type of credential that won\'t work with the Vision API.');
   }
 } else {
   console.error('No Google Cloud Vision API key found in environment variables. Please check your .env file.');
@@ -29,18 +27,6 @@ const cleanApiKey = GOOGLE_CLOUD_VISION_API_KEY ?
 
 // Setup the API URL with the cleaned key from environment variables
 const VISION_API_URL = `https://vision.googleapis.com/v1/images:annotate?key=${cleanApiKey}`;
-
-// Flag to enable mock mode when API key is invalid
-const MOCK_MODE = !cleanApiKey.startsWith('AIza');
-
-// Mock data for testing without a valid API key
-const MOCK_FOOD_ITEMS = [
-  { name: 'Apple', confidence: 0.95, price: 1.49, category: 'Fruit', productId: 'mock-001' },
-  { name: 'Banana', confidence: 0.92, price: 0.99, category: 'Fruit', productId: 'mock-002' },
-  { name: 'Orange', confidence: 0.88, price: 1.29, category: 'Fruit', productId: 'mock-003' },
-  { name: 'Tomato', confidence: 0.85, price: 2.99, category: 'Vegetable', productId: 'mock-004' },
-  { name: 'Carrot', confidence: 0.82, price: 1.19, category: 'Vegetable', productId: 'mock-005' }
-];
 
 interface VisionApiResponse {
   responses: Array<{
@@ -63,7 +49,7 @@ interface VisionApiResponse {
 
 interface RecognizedFoodItem {
   name: string;
-  confidence: number;
+  confidence?: number;
   price?: number;
   category?: string;
   productId?: string;
@@ -74,7 +60,6 @@ interface RecognizedFoodItem {
 interface RecognitionResult {
   items: RecognizedFoodItem[];
   rawResponse: any;
-  isMocked?: boolean;
 }
 
 /**
@@ -213,19 +198,75 @@ async function getProductFromDatabase(productName: string): Promise<Product | nu
 }
 
 /**
+ * Create a RecognizedFoodItem from a Product and confidence score
+ */
+function createRecognizedItem(product: Product, confidence: number, label: string): RecognizedFoodItem {
+  const item: RecognizedFoodItem = {
+    name: product.name,
+    price: product.price,
+    category: product.category,
+    productId: product.id,
+    description: product.description
+  };
+  
+  if (product.image_url) {
+    item.image_url = product.image_url;
+  }
+  
+  // Keep confidence for internal use only
+  Object.defineProperty(item, 'confidence', {
+    value: confidence,
+    enumerable: false,
+    writable: true,
+    configurable: true
+  });
+  
+  console.log(`Added match: ${product.name} from "${label}"`);
+  return item;
+}
+
+/**
+ * Process a label from the Vision API to find a matching product
+ */
+async function processVisionLabel(label: string, confidence: number, source: string): Promise<RecognizedFoodItem | null> {
+  if (isFood(label)) {
+    const product = await getProductFromDatabase(label);
+    if (product) {
+      return createRecognizedItem(product, confidence, `${source}: ${label}`);
+    }
+  }
+  return null;
+}
+
+/**
+ * Create a "not in database" fallback item
+ */
+function createNotInDatabaseItem(): RecognizedFoodItem {
+  console.log('No items detected in the image. Returning "not in database" message.');
+  
+  const item = {
+    name: "Not in database",
+    price: 0,
+    category: "Unknown",
+    productId: "unknown",
+    description: "This item was recognized but not found in the database."
+  };
+  
+  // Keep confidence for internal use only
+  Object.defineProperty(item, 'confidence', {
+    value: 1.0,
+    enumerable: false,
+    writable: true,
+    configurable: true
+  });
+  
+  return item;
+}
+
+/**
  * Recognize food items in an image using Google Cloud Vision API
  */
 export async function recognizeFoodWithVision(base64Image: string): Promise<RecognitionResult> {
-  // If MOCK_MODE is enabled, return mock data instead of calling the API
-  if (MOCK_MODE) {
-    console.log('Using MOCK mode because API key appears invalid. Returning test data.');
-    return {
-      items: MOCK_FOOD_ITEMS,
-      rawResponse: { mock: true },
-      isMocked: true
-    };
-  }
-
   try {
     // Prepare the request data
     const requestData = {
@@ -260,21 +301,6 @@ export async function recognizeFoodWithVision(base64Image: string): Promise<Reco
     if (!response.ok) {
       const errorText = await response.text();
       console.error(`Vision API error: ${response.status} ${errorText}`);
-      
-      // If API key is invalid, suggest using a proper key
-      if (response.status === 400 && errorText.includes('API key')) {
-        console.error('It appears your Google Cloud Vision API key is invalid.');
-        console.error('Please obtain a valid key from the Google Cloud Console.');
-        
-        // Return mock data for testing purposes
-        console.log('Returning mock data for testing. Please fix your API key for production use.');
-        return {
-          items: MOCK_FOOD_ITEMS,
-          rawResponse: { error: errorText, mock: true },
-          isMocked: true
-        };
-      }
-      
       throw new Error(`Vision API error: ${response.status} ${errorText}`);
     }
     
@@ -301,66 +327,43 @@ export async function recognizeFoodWithVision(base64Image: string): Promise<Reco
     
     // First, try to match the best guess label directly
     if (bestGuessLabel && isFood(bestGuessLabel)) {
-      // Get product from database
       const product = await getProductFromDatabase(bestGuessLabel);
-      
       if (product) {
-        recognizedItems.push({
-          name: product.name,
-          confidence: 0.98, // High confidence since it's the best guess
-          price: product.price,
-          category: product.category,
-          productId: product.id,
-          description: product.description,
-          image_url: product.image_url
-        });
-        console.log(`Added best guess match: ${product.name} from "${bestGuessLabel}"`);
-        
-        // Return early with just this match
+        recognizedItems.push(createRecognizedItem(product, 0.98, `best guess: ${bestGuessLabel}`));
         return {
-          items: recognizedItems,
+          items: recognizedItems.map(item => ({
+            ...item,
+            confidence: undefined
+          })),
           rawResponse: data
         };
       }
     }
     
     // If best guess didn't match, try with top label annotations
-    if (recognizedItems.length === 0 && data.responses[0].labelAnnotations) {
+    if (data.responses[0].labelAnnotations) {
       // Sort by confidence score
       const sortedLabels = [...data.responses[0].labelAnnotations].sort((a, b) => b.score - a.score);
       
       // Only try the top 3 labels with highest confidence
       for (let i = 0; i < Math.min(3, sortedLabels.length); i++) {
         const label = sortedLabels[i];
-        
-        if (isFood(label.description)) {
-          // Get product from database
-          const product = await getProductFromDatabase(label.description);
-          
-          if (product) {
-            recognizedItems.push({
-              name: product.name,
-              confidence: label.score,
-              price: product.price,
-              category: product.category,
-              productId: product.id,
-              description: product.description,
-              image_url: product.image_url
-            });
-            console.log(`Added label match: ${product.name} from "${label.description}"`);
-            
-            // Return as soon as we find a match
-            return {
-              items: recognizedItems,
-              rawResponse: data
-            };
-          }
+        const item = await processVisionLabel(label.description, label.score, "label");
+        if (item) {
+          recognizedItems.push(item);
+          return {
+            items: recognizedItems.map(item => ({
+              ...item,
+              confidence: undefined
+            })),
+            rawResponse: data
+          };
         }
       }
     }
     
     // If still no match, try with web entities
-    if (recognizedItems.length === 0 && data.responses[0].webDetection?.webEntities) {
+    if (data.responses[0].webDetection?.webEntities) {
       const webEntities = data.responses[0].webDetection.webEntities;
       
       // Only try the top 3 web entities
@@ -368,49 +371,30 @@ export async function recognizeFoodWithVision(base64Image: string): Promise<Reco
         const entity = webEntities[i];
         if (!entity.description) continue;
         
-        if (isFood(entity.description)) {
-          // Get product from database
-          const product = await getProductFromDatabase(entity.description);
-          
-          if (product) {
-            recognizedItems.push({
-              name: product.name,
-              confidence: entity.score,
-              price: product.price,
-              category: product.category,
-              productId: product.id,
-              description: product.description,
-              image_url: product.image_url
-            });
-            console.log(`Added web entity match: ${product.name} from "${entity.description}"`);
-            
-            // Return as soon as we find a match
-            return {
-              items: recognizedItems,
-              rawResponse: data
-            };
-          }
+        const item = await processVisionLabel(entity.description, entity.score, "web entity");
+        if (item) {
+          recognizedItems.push(item);
+          return {
+            items: recognizedItems.map(item => ({
+              ...item,
+              confidence: undefined
+            })),
+            rawResponse: data
+          };
         }
       }
     }
     
-    // If no items were found, return "not in database" instead of a default product
+    // If no items were found, return "not in database" message
     if (recognizedItems.length === 0) {
-      console.log('No items detected in the image. Returning "not in database" message.');
-      
-      recognizedItems.push({
-        name: "Not in database",
-        confidence: 0.5, // Low confidence since it's a fallback
-        price: 0,
-        category: "Unknown",
-        productId: "unknown",
-        description: "This item was recognized but not found in the database."
-      });
-      console.log(`Added "Not in database" message instead of fallback product`);
+      recognizedItems.push(createNotInDatabaseItem());
     }
     
     return {
-      items: recognizedItems,
+      items: recognizedItems.map(item => ({
+        ...item,
+        confidence: undefined
+      })),
       rawResponse: data
     };
   } catch (error) {

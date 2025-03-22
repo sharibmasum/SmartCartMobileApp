@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useCallback } from 'react';
 import {
   StyleSheet,
   View,
@@ -28,9 +28,9 @@ export default function Cart() {
     getCartTotals 
   } = useCart(DEMO_USER_ID);
 
-  // Refresh cart data when screen loads
-  useEffect(() => {
-    loadCart();
+  // Manual refresh function if we need explicit refresh
+  const refreshCart = useCallback(() => {
+    loadCart(true); // Force refresh
   }, [loadCart]);
 
   const { subtotal, tax, total, itemCount } = getCartTotals();
@@ -66,7 +66,7 @@ export default function Cart() {
       ) : error ? (
         <View style={styles.centeredContainer}>
           <Text>Error loading cart: {error}</Text>
-          <TouchableOpacity onPress={loadCart} style={styles.retryButton}>
+          <TouchableOpacity onPress={refreshCart} style={styles.retryButton}>
             <Text style={styles.retryButtonText}>Retry</Text>
           </TouchableOpacity>
         </View>
@@ -78,7 +78,7 @@ export default function Cart() {
             <CartItem
               item={item}
               onRemove={() => removeItem(item.id)}
-              onUpdateQuantity={(quantity) => updateItemQuantity(item.id, quantity)}
+              onUpdateQuantity={(quantity: number) => updateItemQuantity(item.id, quantity)}
             />
           )}
           style={styles.cartList}
@@ -86,7 +86,7 @@ export default function Cart() {
       ) : (
         <View style={styles.centeredContainer}>
           <Text>Your cart is empty</Text>
-          <Link href="/" asChild>
+          <Link href="/(main)/scanner" asChild>
             <TouchableOpacity style={styles.continueShoppingButton}>
               <Text style={styles.continueShoppingText}>Continue Shopping</Text>
             </TouchableOpacity>

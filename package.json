@@ -4,15 +4,11 @@
   "version": "1.0.0",
   "scripts": {
     "start": "expo start",
-    "reset-project": "node ./scripts/reset-project.js",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
     "test": "jest --watchAll",
-    "lint": "expo lint",
-    "test:vision": "node ./scripts/run-vision-test.js",
-    "test:products": "npx babel-node ./scripts/test-product-search.js --extensions .ts,.js",
-    "db:populate-fruits": "node ./scripts/populate-products.js"
+    "lint": "expo lint"
   },
   "jest": {
     "preset": "jest-expo"

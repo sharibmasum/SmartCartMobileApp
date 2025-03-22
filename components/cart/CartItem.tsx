@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, View, Text, TouchableOpacity, Image } from 'react-native';
+import { View, Text, Image, StyleSheet, TouchableOpacity } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { CartItem as CartItemType } from '../../types/cart.types';
 
@@ -11,80 +11,94 @@ interface CartItemProps {
 
 const CartItem: React.FC<CartItemProps> = ({ item, onRemove, onUpdateQuantity }) => {
   const { product, quantity } = item;
-
-  const handleIncrease = () => {
+  
+  const handleIncrement = () => {
     onUpdateQuantity(quantity + 1);
   };
-
-  const handleDecrease = () => {
+  
+  const handleDecrement = () => {
     if (quantity > 1) {
       onUpdateQuantity(quantity - 1);
     } else {
       onRemove();
     }
   };
-
-  const subtotal = product.price * quantity;
-
+  
   return (
     <View style={styles.container}>
-      <View style={styles.productInfo}>
-        <Image 
-          source={{ uri: product.image_url || 'https://via.placeholder.com/80' }} 
-          style={styles.productImage} 
-          resizeMode="cover"
-        />
-        
-        <View style={styles.productDetails}>
-          <Text style={styles.productName} numberOfLines={2} ellipsizeMode="tail">
-            {product.name}
-          </Text>
-          
-          <Text style={styles.productPrice}>${product.price.toFixed(2)}</Text>
-          
-          <View style={styles.quantityContainer}>
-            <TouchableOpacity onPress={handleDecrease} style={styles.quantityButton}>
-              <MaterialIcons name="remove" size={16} color="#53B175" />
-            </TouchableOpacity>
-            
-            <Text style={styles.quantityText}>{quantity}</Text>
-            
-            <TouchableOpacity onPress={handleIncrease} style={styles.quantityButton}>
-              <MaterialIcons name="add" size={16} color="#53B175" />
-            </TouchableOpacity>
+      {/* Product Image */}
+      <View style={styles.imageContainer}>
+        {product.image_url ? (
+          <Image source={{ uri: product.image_url }} style={styles.image} />
+        ) : (
+          <View style={styles.placeholderImage}>
+            <MaterialIcons name="image" size={30} color="#ccc" />
           </View>
-        </View>
+        )}
       </View>
       
-      <View style={styles.actionsContainer}>
-        <Text style={styles.subtotal}>${subtotal.toFixed(2)}</Text>
+      {/* Product Details */}
+      <View style={styles.detailsContainer}>
+        <Text style={styles.productName}>{product.name}</Text>
+        <Text style={styles.productPrice}>${product.price.toFixed(2)}</Text>
+      </View>
+      
+      {/* Quantity Controls */}
+      <View style={styles.quantityContainer}>
+        <TouchableOpacity onPress={handleDecrement} style={styles.quantityButton}>
+          <MaterialIcons name="remove" size={18} color="#666" />
+        </TouchableOpacity>
         
-        <TouchableOpacity onPress={onRemove} style={styles.removeButton}>
-          <MaterialIcons name="delete-outline" size={20} color="#FF6B6B" />
+        <Text style={styles.quantityText}>{quantity}</Text>
+        
+        <TouchableOpacity onPress={handleIncrement} style={styles.quantityButton}>
+          <MaterialIcons name="add" size={18} color="#666" />
         </TouchableOpacity>
       </View>
+      
+      {/* Remove Button */}
+      <TouchableOpacity onPress={onRemove} style={styles.removeButton}>
+        <MaterialIcons name="delete-outline" size={24} color="#ff6b6b" />
+      </TouchableOpacity>
     </View>
   );
 };
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: '#fff',
-    padding: 15,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 15,
+    paddingVertical: 15,
     borderBottomWidth: 1,
     borderBottomColor: '#eee',
+    backgroundColor: '#fff',
   },
-  productInfo: {
-    flexDirection: 'row',
-  },
-  productImage: {
-    width: 80,
-    height: 80,
+  imageContainer: {
+    width: 70,
+    height: 70,
     borderRadius: 10,
+    overflow: 'hidden',
     marginRight: 15,
+    backgroundColor: '#f9f9f9',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  productDetails: {
+  image: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  placeholderImage: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f2f2f2',
+  },
+  detailsContainer: {
     flex: 1,
+    marginRight: 10,
   },
   productName: {
     fontSize: 16,
@@ -92,37 +106,29 @@ const styles = StyleSheet.create({
     marginBottom: 5,
   },
   productPrice: {
-    fontSize: 14,
+    fontSize: 15,
     color: '#53B175',
-    marginBottom: 10,
+    fontWeight: 'bold',
   },
   quantityContainer: {
     flexDirection: 'row',
     alignItems: 'center',
+    marginRight: 15,
   },
   quantityButton: {
-    width: 25,
-    height: 25,
-    borderRadius: 12.5,
-    borderWidth: 1,
-    borderColor: '#E2E2E2',
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#f3f3f3',
     alignItems: 'center',
     justifyContent: 'center',
   },
   quantityText: {
-    fontSize: 14,
+    fontSize: 16,
     fontWeight: '500',
     marginHorizontal: 10,
-  },
-  actionsContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 10,
-  },
-  subtotal: {
-    fontSize: 16,
-    fontWeight: 'bold',
+    minWidth: 20,
+    textAlign: 'center',
   },
   removeButton: {
     padding: 5,

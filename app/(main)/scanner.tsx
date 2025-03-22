@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   StyleSheet,
   View,
@@ -24,6 +24,18 @@ interface ScannedItem {
   confidence?: number;
 }
 
+// Use a properly formatted UUID for the demo user ID
+const DEMO_USER_ID = '550e8400-e29b-41d4-a716-446655440000';
+
+// Helper function to generate a valid UUID v4
+function generateUUID() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+
 export default function Scanner() {
   const [permission, requestPermission] = useCameraPermissions();
   const [scannedItem, setScannedItem] = useState<ScannedItem | null>(null);
@@ -31,23 +43,29 @@ export default function Scanner() {
   const [flash, setFlash] = useState(false);
   const [facing, setFacing] = useState<'back' | 'front'>('back');
   const cameraRef = useRef<any>(null);
-  const [userId, setUserId] = useState<string | null>(null);
+  const [userId, setUserId] = useState<string>(DEMO_USER_ID); // Initialize with demo UUID
   
   // Get the current user ID
   useEffect(() => {
     const getUserId = async () => {
-      const { data, error } = await supabase.auth.getSession();
-      if (error) {
-        console.error('Error getting user session:', error);
-        return;
-      }
-      
-      if (data?.session?.user) {
-        setUserId(data.session.user.id);
-      } else {
-        // For development, use a UUID that you know has proper permissions
-        console.log('No authenticated user, using demo ID');
-        setUserId('550e8400-e29b-41d4-a716-446655440000');
+      try {
+        const { data, error } = await supabase.auth.getSession();
+        if (error) {
+          console.error('Error getting user session:', error);
+          return;
+        }
+        
+        if (data?.session?.user) {
+          setUserId(data.session.user.id);
+        } else {
+          // For development, use a demo UUID
+          console.log('No authenticated user, using demo UUID');
+          setUserId(DEMO_USER_ID);
+        }
+      } catch (err) {
+        console.error('Error in getUserId:', err);
+        // Fall back to demo UUID
+        setUserId(DEMO_USER_ID);
       }
     };
     
@@ -55,7 +73,7 @@ export default function Scanner() {
   }, []);
   
   // Get cart functionality from our hook
-  const { addProductToCart, loading: cartLoading } = useCart(userId || '');
+  const { addProductToCart, loading: cartLoading } = useCart(userId);
 
   useEffect(() => {
     (async () => {
@@ -80,11 +98,8 @@ export default function Scanner() {
     }
   };
 
-  const handleScan = async () => {
-    if (!userId) {
-      Alert.alert("Authentication Error", "Please sign in to use this feature.");
-      return;
-    }
+  const handleScan = useCallback(async () => {
+    if (scanning || cartLoading) return; // Prevent multiple scans
     
     setScanning(true);
     
@@ -105,17 +120,6 @@ export default function Scanner() {
         return;
       }
       
-      // Check if we're using mock data
-      if (recognitionResult.isMocked) {
-        console.log("Using mocked data because API key is invalid");
-        // Optionally alert the user that mock data is being used
-        Alert.alert(
-          "Using Demo Mode",
-          "Your API key appears to be invalid. Using demo data for testing. To use real scanning, please update your Google Cloud Vision API key in your .env file.",
-          [{ text: "OK" }]
-        );
-      }
-      
       // Get the highest confidence food item
       const bestMatch = recognitionResult.items[0];
       
@@ -124,31 +128,28 @@ export default function Scanner() {
         name: bestMatch.name,
         detected: true,
         price: bestMatch.price || 2.99, // Default price if not available
-        confidence: bestMatch.confidence,
+        confidence: bestMatch.confidence, // Keep for internal use but don't show to user
       });
       
       // Show add to cart option
       Alert.alert(
         "Food Item Detected",
-        `${bestMatch.name}\nConfidence: ${(bestMatch.confidence * 100).toFixed(1)}%\nPrice: $${bestMatch.price?.toFixed(2) || '2.99'}\n\nWould you like to add this to your cart?`,
+        `${bestMatch.name}\nPrice: $${bestMatch.price?.toFixed(2) || '2.99'}\n\nWould you like to add this to your cart?`,
         [
           {
             text: "Cancel",
-            style: "cancel"
+            style: "cancel",
+            onPress: () => setScanning(false)
           },
           {
             text: "Add to Cart",
             onPress: async () => {
               try {
-                if (!userId) {
-                  throw new Error('No user ID available');
-                }
-                
                 // Convert the recognized item to a product format
                 const recognizedProduct = {
-                  id: `vision_${Date.now()}`,
+                  id: generateUUID(), // Generate proper UUID for the product ID
                   name: bestMatch.name,
-                  description: `Detected with ${(bestMatch.confidence * 100).toFixed(1)}% confidence`,
+                  description: bestMatch.description || `Detected ${bestMatch.name}`,
                   price: bestMatch.price || 2.99,
                   image_url: photo.uri,
                   barcode: '',
@@ -157,23 +158,32 @@ export default function Scanner() {
                   updated_at: new Date().toISOString()
                 };
                 
-                await addProductToCart(recognizedProduct, 1);
-                Alert.alert("Success", "Item added to cart!");
+                // First close the current dialog to prevent UI freezing
+                setScanning(false);
+                
+                // Then add product to cart
+                const result = await addProductToCart(recognizedProduct, 1);
+                
+                // Show success message after operation completes
+                if (result) {
+                  Alert.alert("Success", "Item added to cart!");
+                }
               } catch (error) {
                 console.error('Error adding to cart:', error);
-                Alert.alert("Error", "Failed to add item to cart. Please make sure you're signed in.");
+                Alert.alert("Error", "Failed to add item to cart.");
+                setScanning(false);
               }
             }
           }
-        ]
+        ],
+        { cancelable: false }
       );
     } catch (error) {
       console.error('Vision API error:', error);
       Alert.alert("Error", "Failed to scan item. Please try again.");
-    } finally {
       setScanning(false);
     }
-  };
+  }, [scanning, cartLoading, takePicture, addProductToCart]);
 
   const toggleFlash = () => {
     setFlash(!flash);
@@ -257,9 +267,9 @@ export default function Scanner() {
 
       {/* Scan Button */}
       <TouchableOpacity 
-        style={styles.scanButton}
+        style={[styles.scanButton, (scanning || cartLoading) && styles.disabledButton]}
         onPress={handleScan}
-        disabled={scanning || cartLoading}
+        activeOpacity={0.7}
       >
         <Text style={styles.scanButtonText}>
           {scanning ? 'Scanning...' : 'Scan Item'}
@@ -390,5 +400,9 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
     color: '#fff',
+  },
+  disabledButton: {
+    backgroundColor: '#a0d4b1',
+    opacity: 0.8,
   },
 });

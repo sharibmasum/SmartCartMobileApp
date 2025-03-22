@@ -178,8 +178,9 @@ export const clearAllAuthTokens = async () => {
   console.log('Clearing all auth tokens to force login...');
   
   try {
-    // Get the specific Supabase token key format (this is the one actually being used)
-    const tokenKey = 'sb-daaffpuizmulmepnhvly-auth-token';
+    // Extract project reference from URL to create the token key dynamically
+    const projectRef = supabaseUrl ? supabaseUrl.match(/https:\/\/([^.]+)/)?.[1] : '';
+    const tokenKey = projectRef ? `sb-${projectRef}-auth-token` : 'supabase-auth-token';
     
     // Clear the token directly
     console.log(`Deleting token: ${tokenKey}`);
