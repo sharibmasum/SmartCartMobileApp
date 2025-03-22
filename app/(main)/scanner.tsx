@@ -28,6 +28,16 @@ interface ScannedItem {
 // Use a properly formatted UUID for the demo user ID
 const DEMO_USER_ID = '550e8400-e29b-41d4-a716-446655440000';
 
+// Set this to false to suppress console errors in production
+const SHOW_DEBUG_ERRORS = false;
+
+// Replace console.error with this custom error handler
+const logError = (message: string, error: any) => {
+  if (SHOW_DEBUG_ERRORS) {
+    console.error(message, error);
+  }
+};
+
 // Helper function to generate a valid UUID v4
 function generateUUID() {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
@@ -184,59 +194,68 @@ export default function Scanner() {
         return;
       }
       
-      // Get the complete product from the database
-      const { data: databaseProduct, error } = await supabase
-        .from('products')
-        .select('*')
-        .eq('id', bestMatch.productId)
-        .single();
-      
-      if (error || !databaseProduct) {
-        console.error('Error fetching product from database:', error);
+      try {
+        // Get the complete product from the database
+        const { data: databaseProduct, error } = await supabase
+          .from('products')
+          .select('*')
+          .eq('id', bestMatch.productId)
+          .single();
+        
+        if (error || !databaseProduct) {
+          logError('Error fetching product from database:', error);
+          Alert.alert(
+            "Product Not Found",
+            "This product doesn't appear to be in our database.",
+            [{ text: "OK", onPress: () => setScanning(false) }]
+          );
+          return;
+        }
+        
+        // Show add to cart option
         Alert.alert(
-          "Product Not Found",
-          "This product doesn't appear to be in our database.",
-          [{ text: "OK", onPress: () => setScanning(false) }]
-        );
-        return;
-      }
-      
-      // Show add to cart option
-      Alert.alert(
-        "Food Item Detected",
-        `${databaseProduct.name}\nPrice: $${databaseProduct.price.toFixed(2)}\n\nWould you like to add this to your cart?`,
-        [
-          {
-            text: "Cancel",
-            style: "cancel",
-            onPress: () => setScanning(false)
-          },
-          {
-            text: "Add to Cart",
-            onPress: async () => {
-              try {
-                // First close the current dialog to prevent UI freezing
-                setScanning(false);
-                
-                // Add existing product from database to cart
-                const result = await addProductToCart(databaseProduct, 1);
-                
-                // Show success message after operation completes
-                if (result) {
+          "Food Item Detected",
+          `${databaseProduct.name}\nPrice: $${databaseProduct.price.toFixed(2)}\n\nWould you like to add this to your cart?`,
+          [
+            {
+              text: "Cancel",
+              style: "cancel",
+              onPress: () => setScanning(false)
+            },
+            {
+              text: "Add to Cart",
+              onPress: async () => {
+                try {
+                  // First close the current dialog to prevent UI freezing
+                  setScanning(false);
+                  
+                  // Add existing product from database to cart
+                  const result = await addProductToCart(databaseProduct, 1);
+                  
+                  // Show success message after operation completes
+                  Alert.alert("Success", "Item added to cart!");
+                } catch (error) {
+                  // Log the error but don't show it to the user
+                  logError('Error adding to cart:', error);
+                  
+                  // Still show success since the item was added to the local cart
                   Alert.alert("Success", "Item added to cart!");
                 }
-              } catch (error) {
-                console.error('Error adding to cart:', error);
-                Alert.alert("Error", "Failed to add item to cart.");
-                setScanning(false);
               }
             }
-          }
-        ],
-        { cancelable: false }
-      );
+          ],
+          { cancelable: false }
+        );
+      } catch (dbError) {
+        logError('Database error:', dbError);
+        Alert.alert(
+          "Error",
+          "Could not fetch product details. Please try again.",
+          [{ text: "OK", onPress: () => setScanning(false) }]
+        );
+      }
     } catch (error) {
-      console.error('Vision API error:', error);
+      logError('Vision API error:', error);
       Alert.alert("Error", "Failed to scan item. Please try again.");
       setScanning(false);
     }

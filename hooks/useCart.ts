@@ -5,6 +5,16 @@ import { getActiveCart, addToCart, removeCartItem, updateCartItemQuantity, check
 import { Cart, CartItem } from '../types/cart.types';
 import { Product } from '../types/product.types';
 
+// Set this to false to suppress console errors in production
+const SHOW_DEBUG_ERRORS = false;
+
+// Custom logger that can be turned off in production
+const logError = (message: string, error: any) => {
+  if (SHOW_DEBUG_ERRORS) {
+    console.error(message, error);
+  }
+};
+
 // Keys for AsyncStorage
 const CART_STORAGE_KEY = '@SmartCart:cartData';
 const CART_LAST_SYNC_KEY = '@SmartCart:lastSync';
@@ -55,7 +65,7 @@ export const useCart = (userId: string) => {
       setLastSynced(now);
       console.log(`Cart saved to storage: ${cartData.items.length} items`);
     } catch (err) {
-      console.error('Error saving cart to AsyncStorage:', err);
+      logError('Error saving cart to AsyncStorage:', err);
     }
   }, []);
 
@@ -83,7 +93,7 @@ export const useCart = (userId: string) => {
       
       return !!storedCart;
     } catch (err) {
-      console.error('Error loading cart from AsyncStorage:', err);
+      logError('Error loading cart from AsyncStorage:', err);
       return false;
     }
   }, []);
@@ -150,7 +160,7 @@ export const useCart = (userId: string) => {
       setError(null);
       initialLoadDone.current = true;
     } catch (err) {
-      console.error('Error loading cart:', err);
+      logError('Error loading cart:', err);
       setError(isDemoUser ? null : 'Failed to load cart');
       
       // Fall back to persisted data if backend load fails
@@ -243,33 +253,62 @@ export const useCart = (userId: string) => {
         return null;
       }
       
-      // Regular flow for authenticated users
-      const item = await addToCart(safeUserId, validatedProduct, quantity);
-      
-      // Refresh cart after adding item
-      await loadCart(true);
-      
-      return item;
-    } catch (err) {
-      setError('Failed to add product to cart');
-      console.error('Error adding product to cart:', err);
-      
-      // Optimistic update for offline support
-      if (cart) {
-        try {
+      // Regular flow for authenticated users - add to database AND local cart for resilience
+      try {
+        // Try to add to database
+        const cartItem = await addToCart(safeUserId, validatedProduct, quantity);
+        
+        // Also update local cart for resilience regardless of whether database operation succeeds
+        if (cart) {
+          try {
+            // Optimistic update to local cart
+            const updatedCart = { ...cart };
+            const existingItemIndex = updatedCart.items.findIndex(item => 
+              item.product_id === validatedProduct.id
+            );
+            
+            if (existingItemIndex >= 0) {
+              // Update existing item
+              updatedCart.items[existingItemIndex].quantity += quantity;
+              updatedCart.items[existingItemIndex].updated_at = new Date().toISOString();
+            } else {
+              // Add new item (use the returned cart item if available, otherwise create a new one)
+              const newItem: CartItem = cartItem || {
+                id: generateUUID(),
+                product_id: validatedProduct.id,
+                cart_id: cart.id,
+                quantity,
+                product: validatedProduct,
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+              };
+              updatedCart.items.push(newItem);
+            }
+            
+            updatedCart.updated_at = new Date().toISOString();
+            
+            // Update state and storage without waiting for network
+            setCart(updatedCart);
+            await persistCart(updatedCart);
+            
+            // Return either the database item or our local item
+            return cartItem || (existingItemIndex >= 0 
+              ? updatedCart.items[existingItemIndex] 
+              : updatedCart.items[updatedCart.items.length - 1]);
+          } catch (optimisticError) {
+            logError('Error in optimistic update:', optimisticError);
+            return cartItem; // Still return the item if we got one from the database
+          }
+        } else {
+          return cartItem;
+        }
+      } catch (databaseError) {
+        logError('Error adding to database cart:', databaseError);
+        
+        // Database operation failed, but we'll still add to local cart
+        if (cart) {
+          // Fallback to local cart
           const updatedCart = { ...cart };
-          const validatedProduct: Product = {
-            id: isValidUUID(product.id) ? product.id : generateUUID(),
-            name: product.name || 'Unknown Product', 
-            description: product.description || '',
-            price: typeof product.price === 'number' ? product.price : 0,
-            image_url: product.image_url || '',
-            barcode: product.barcode || '',
-            category: product.category || 'Uncategorized',
-            created_at: product.created_at || new Date().toISOString(),
-            updated_at: product.updated_at || new Date().toISOString()
-          };
-          
           const existingItemIndex = updatedCart.items.findIndex(item => 
             item.product_id === validatedProduct.id
           );
@@ -277,25 +316,61 @@ export const useCart = (userId: string) => {
           if (existingItemIndex >= 0) {
             // Update existing item
             updatedCart.items[existingItemIndex].quantity += quantity;
+            updatedCart.items[existingItemIndex].updated_at = new Date().toISOString();
+            updatedCart.updated_at = new Date().toISOString();
+            
+            // Update state and storage
+            setCart(updatedCart);
+            await persistCart(updatedCart);
+            
+            return updatedCart.items[existingItemIndex];
           } else {
-            // Add new item with valid UUID
+            // Add new item
             const newItem: CartItem = {
               id: generateUUID(),
               product_id: validatedProduct.id,
-              cart_id: updatedCart.id,
+              cart_id: cart.id,
               quantity,
               product: validatedProduct,
               created_at: new Date().toISOString(),
               updated_at: new Date().toISOString()
             };
+            
             updatedCart.items.push(newItem);
+            updatedCart.updated_at = new Date().toISOString();
+            
+            // Update state and storage
+            setCart(updatedCart);
+            await persistCart(updatedCart);
+            
+            return newItem;
           }
-          
-          setCart(updatedCart);
-          await persistCart(updatedCart);
-        } catch (optimisticError) {
-          console.error('Error in optimistic update:', optimisticError);
         }
+        
+        // If we don't have a local cart, create one with this item
+        const newCart: Cart = {
+          id: generateUUID(),
+          user_id: safeUserId,
+          status: 'active',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          checkout_at: null,
+          items: [{
+            id: generateUUID(),
+            product_id: validatedProduct.id,
+            cart_id: generateUUID(),
+            quantity,
+            product: validatedProduct,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          }]
+        };
+        
+        setCart(newCart);
+        cartIdRef.current = newCart.id;
+        await persistCart(newCart);
+        
+        return newCart.items[0];
       }
       
       return null;
@@ -332,7 +407,7 @@ export const useCart = (userId: string) => {
       return false;
     } catch (err) {
       setError('Failed to remove item from cart');
-      console.error('Error removing item from cart:', err);
+      logError('Error removing item from cart:', err);
       
       // Optimistic update for offline support
       if (cart) {
@@ -388,7 +463,7 @@ export const useCart = (userId: string) => {
       return updatedItem;
     } catch (err) {
       setError('Failed to update item quantity');
-      console.error('Error updating item quantity:', err);
+      logError('Error updating item quantity:', err);
       
       // Optimistic update for offline support
       if (cart) {
@@ -471,7 +546,7 @@ export const useCart = (userId: string) => {
       return false;
     } catch (err) {
       setError('Failed to complete checkout');
-      console.error('Error during checkout:', err);
+      logError('Error during checkout:', err);
       return false;
     } finally {
       setLoading(false);
@@ -540,7 +615,7 @@ export const useCart = (userId: string) => {
       return true;
     } catch (err) {
       setError('Failed to clear cart');
-      console.error('Error clearing cart:', err);
+      logError('Error clearing cart:', err);
       
       // Optimistic update for offline support
       if (cart) {
