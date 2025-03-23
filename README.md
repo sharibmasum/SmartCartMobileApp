@@ -24,7 +24,8 @@ Watch our application demo: [SmartCart Demo Video](https://drive.google.com/file
 Below are screenshots showcasing the app's intuitive user interface:
 
 **User authentication screen**
-![IMG_7101](https://github.com/user-attachments/assets/736c858c-d14d-43a0-8e9a-6e52e9dd68a9)
+<img src="https://github.com/user-attachments/assets/736c858c-d14d-43a0-8e9a-6e52e9dd68a9" alt="IMG_7101" width="500"/>
+
 
 **Item scanning and detection**
 
