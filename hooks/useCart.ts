@@ -464,7 +464,27 @@ export const useCart = (userId: string) => {
       // Regular flow for authenticated users
       const updatedItem = await updateCartItemQuantity(cartItemId, quantity);
       
-      // Refresh cart after updating item
+      // Only refresh cart AFTER the database update is complete
+      if (updatedItem) {
+        // Also update the local state for immediate UI feedback
+        if (cart) {
+          const updatedCart = { ...cart };
+          const itemIndex = updatedCart.items.findIndex(item => item.id === cartItemId);
+          
+          if (itemIndex >= 0) {
+            // Update the quantity in the local cart
+            updatedCart.items[itemIndex].quantity = quantity;
+            updatedCart.items[itemIndex].updated_at = new Date().toISOString();
+            updatedCart.updated_at = new Date().toISOString();
+            
+            // Update state and persist to storage
+            setCart(updatedCart);
+            await persistCart(updatedCart);
+          }
+        }
+      }
+      
+      // Refresh cart to ensure sync with server
       await loadCart(true);
       
       return updatedItem;
@@ -484,6 +504,7 @@ export const useCart = (userId: string) => {
           } else {
             // Update the quantity
             updatedCart.items[itemIndex].quantity = quantity;
+            updatedCart.items[itemIndex].updated_at = new Date().toISOString();
           }
           
           setCart(updatedCart);

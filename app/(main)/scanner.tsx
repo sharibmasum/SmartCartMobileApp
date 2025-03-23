@@ -225,7 +225,11 @@ export default function Scanner() {
       const recognitionResult = await recognizeFoodWithVision(photo.base64);
       
       if (!recognitionResult || !recognitionResult.items || recognitionResult.items.length === 0) {
-        Alert.alert("Not Recognized", "Couldn't identify any food item. Please try again.");
+        // Display in UI instead of alert
+        setScannedItem({
+          name: "No item recognized",
+          detected: false,
+        });
         setScanning(false);
         return;
       }
@@ -233,21 +237,14 @@ export default function Scanner() {
       // Get the highest confidence food item
       const bestMatch = recognitionResult.items[0];
       
-      // Set the scanned item state
-      setScannedItem({
-        name: bestMatch.name,
-        detected: true,
-        price: bestMatch.price || 2.99, // Default price if not available
-        confidence: bestMatch.confidence, // Keep for internal use but don't show to user
-      });
-      
       // Use the productId to get the complete product information
       if (!bestMatch.productId) {
-        Alert.alert(
-          "Product Not Found",
-          "This product doesn't appear to be in our database.",
-          [{ text: "OK", onPress: () => setScanning(false) }]
-        );
+        // Display in UI instead of alert
+        setScannedItem({
+          name: "Item not in database",
+          detected: false, // This will hide the checkmark
+        });
+        setScanning(false);
         return;
       }
       
@@ -261,13 +258,22 @@ export default function Scanner() {
         
         if (error || !databaseProduct) {
           logError('Error fetching product from database:', error);
-          Alert.alert(
-            "Product Not Found",
-            "This product doesn't appear to be in our database.",
-            [{ text: "OK", onPress: () => setScanning(false) }]
-          );
+          // Display in UI instead of alert
+          setScannedItem({
+            name: "Item not in database",
+            detected: false, // This will hide the checkmark
+          });
+          setScanning(false);
           return;
         }
+        
+        // Set the scanned item state with success
+        setScannedItem({
+          name: bestMatch.name,
+          detected: true,
+          price: bestMatch.price || 2.99, // Default price if not available
+          confidence: bestMatch.confidence, // Keep for internal use but don't show to user
+        });
         
         // Show product in slide-up panel
         setDetectedProduct(databaseProduct);
@@ -275,15 +281,20 @@ export default function Scanner() {
         setScanning(false);
       } catch (dbError) {
         logError('Database error:', dbError);
-        Alert.alert(
-          "Error",
-          "Could not fetch product details. Please try again.",
-          [{ text: "OK", onPress: () => setScanning(false) }]
-        );
+        // Display in UI instead of alert
+        setScannedItem({
+          name: "Item not in database",
+          detected: false, // This will hide the checkmark
+        });
+        setScanning(false);
       }
     } catch (error) {
       logError('Vision API error:', error);
-      Alert.alert("Error", "Failed to scan item. Please try again.");
+      // Display in UI instead of alert
+      setScannedItem({
+        name: "Scan failed",
+        detected: false,
+      });
       setScanning(false);
     }
   }, [scanning, cartLoading, takePicture, addProductToCart]);
@@ -377,7 +388,7 @@ export default function Scanner() {
       {
         translateY: slideUpAnim.interpolate({
           inputRange: [0, 1],
-          outputRange: [300, 0],
+          outputRange: [300, -30],
         }),
       },
     ],
@@ -453,18 +464,27 @@ export default function Scanner() {
             <MaterialIcons name="shopping-cart" size={24} color="#000" />
           </TouchableOpacity>
           
-          <TouchableOpacity style={styles.settingsButton} onPress={handleSettings}>
-            <MaterialIcons name="settings" size={24} color="#333" />
-          </TouchableOpacity>
+          <View style={styles.headerRightButtons}>
+            <TouchableOpacity style={styles.profileButton} onPress={() => router.push('/(main)/profile')}>
+              <MaterialIcons name="person" size={24} color="#333" />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.settingsButton} onPress={handleSettings}>
+              <MaterialIcons name="settings" size={24} color="#333" />
+            </TouchableOpacity>
+          </View>
         </View>
         
         {/* Detected Item */}
         {scannedItem && (
           <View style={styles.detectedItemContainer}>
-            <Text style={styles.detectedItemText}>{scannedItem.name}</Text>
-            <View style={styles.checkmark}>
-              <Text style={styles.checkmarkText}>✓</Text>
-            </View>
+            <Text style={[styles.detectedItemText, !scannedItem.detected && styles.notFoundText]}>
+              {scannedItem.name}
+            </Text>
+            {scannedItem.detected && (
+              <View style={styles.checkmark}>
+                <Text style={styles.checkmarkText}>✓</Text>
+              </View>
+            )}
           </View>
         )}
 
@@ -553,6 +573,7 @@ const styles = StyleSheet.create({
   mainContent: {
     flex: 1,
     paddingVertical: 5,
+    paddingBottom: 20,
   },
   header: {
     flexDirection: 'row',
@@ -715,15 +736,24 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     backgroundColor: 'rgba(0,0,0,0.5)',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    borderTopLeftRadius: 30,
+    borderTopRightRadius: 30,
     overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: -3,
+    },
+    shadowOpacity: 0.27,
+    shadowRadius: 4.65,
+    elevation: 6,
   },
   detectedItemPanelContent: {
     backgroundColor: '#fff',
     padding: 24,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    paddingBottom: 60,
+    borderTopLeftRadius: 30,
+    borderTopRightRadius: 30,
   },
   detectedItemPanelTitle: {
     fontSize: 22,
@@ -816,5 +846,17 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
+  },
+  headerRightButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  profileButton: {
+    padding: 10,
+    marginRight: 5,
+  },
+  notFoundText: {
+    color: '#D32F2F', // Red color for error state
+    fontSize: 18,
   },
 });

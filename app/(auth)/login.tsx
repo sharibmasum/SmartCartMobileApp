@@ -41,18 +41,21 @@ export default function Login() {
         console.log('Login successful - user:', data.user.id);
         console.log('Session:', data.session ? 'exists' : 'does not exist');
         
-        // Update auth state in parent layout
-        setLoading(false); // Make sure UI is responsive during navigation
+        // Make sure we have finished the loading state first
+        setLoading(false);
         
-        // Simplify the navigation approach to be more direct
-        console.log('Navigating to scanner...');
-        try {
-          // Navigate directly to scanner without the two-step process
-          router.replace('/(main)/scanner');
-        } catch (e) {
-          console.error('Navigation error:', e);
-          alert('Login successful but navigation failed. Please restart the app.');
-        }
+        // Wrap in setTimeout to ensure auth state is fully updated
+        setTimeout(() => {
+          // Navigate directly to scanner
+          console.log('Navigating to scanner...');
+          try {
+            router.replace('/(main)/scanner');
+          } catch (e) {
+            console.error('Navigation error:', e);
+            alert('Login successful but navigation failed. Please restart the app.');
+          }
+        }, 100);
+        
         return;
       }
     } catch (err) {

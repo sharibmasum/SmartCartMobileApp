@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, Image, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { CartItem as CartItemType } from '../../types/cart.types';
 import { Theme } from '../../theme';
 import { Feather } from '@expo/vector-icons';
+import ImageDownloader from '../../utils/image-downloader';
 
 interface CartItemProps {
   item: CartItemType;
@@ -12,22 +13,101 @@ interface CartItemProps {
 
 const CartItem: React.FC<CartItemProps> = ({ item, onUpdateQuantity, onRemove }) => {
   const { product, quantity } = item;
-  const [imageLoading, setImageLoading] = React.useState(true);
-  const [imageError, setImageError] = React.useState(false);
+  const [imageLoading, setImageLoading] = useState(true);
+  const [imageError, setImageError] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [localQuantity, setLocalQuantity] = useState(quantity);
+  const [localImageUri, setLocalImageUri] = useState<string | null>(null);
   
+  // Update local quantity whenever the prop changes
+  useEffect(() => {
+    if (localQuantity !== quantity) {
+      console.log(`CartItem ${item.id} quantity updated: ${localQuantity} → ${quantity}`);
+      setLocalQuantity(quantity);
+    }
+  }, [quantity, item.id, localQuantity]);
+
+  // Download and cache the product image
+  useEffect(() => {
+    let isMounted = true;
+    
+    const downloadImage = async () => {
+      if (product?.image_url) {
+        try {
+          setImageLoading(true);
+          const uri = await ImageDownloader.getImageUri(product.image_url);
+          if (isMounted) {
+            setLocalImageUri(uri);
+            setImageError(false);
+          }
+        } catch (error) {
+          if (isMounted) {
+            console.error('Error loading product image:', error);
+            setImageError(true);
+          }
+        } finally {
+          if (isMounted) {
+            setImageLoading(false);
+          }
+        }
+      } else {
+        if (isMounted) {
+          setImageError(true);
+          setImageLoading(false);
+        }
+      }
+    };
+    
+    downloadImage();
+    
+    return () => {
+      isMounted = false;
+    };
+  }, [product?.image_url]);
+
+  // DEBUG: Log all prop changes to this item
+  useEffect(() => {
+    console.log(`CartItem ${item.id} rendered with quantity: ${quantity} (product: ${product?.name})`);
+  }, [item.id, quantity, product]);
+
   if (!product) {
     return null;
   }
 
-  const itemTotal = product.price * quantity;
+  // Always use localQuantity for display and calculations
+  const itemTotal = product.price * localQuantity;
   
-  const incrementQuantity = () => {
-    onUpdateQuantity(item.id, quantity + 1);
+  const incrementQuantity = async () => {
+    const newQuantity = localQuantity + 1;
+    setIsUpdating(true);
+    // Optimistically update local state first
+    setLocalQuantity(newQuantity);
+    try {
+      await onUpdateQuantity(item.id, newQuantity);
+    } catch (error) {
+      // If there's an error, revert to the original quantity
+      setLocalQuantity(quantity);
+      console.error('Failed to update quantity:', error);
+    } finally {
+      setIsUpdating(false);
+    }
   };
   
-  const decrementQuantity = () => {
-    if (quantity > 1) {
-      onUpdateQuantity(item.id, quantity - 1);
+  const decrementQuantity = async () => {
+    if (localQuantity > 1) {
+      const newQuantity = localQuantity - 1;
+      setIsUpdating(true);
+      // Optimistically update local state first
+      setLocalQuantity(newQuantity);
+      try {
+        await onUpdateQuantity(item.id, newQuantity);
+      } catch (error) {
+        // If there's an error, revert to the original quantity
+        setLocalQuantity(quantity);
+        console.error('Failed to update quantity:', error);
+      } finally {
+        setIsUpdating(false);
+      }
     } else {
       onRemove(item.id);
     }
@@ -43,10 +123,10 @@ const CartItem: React.FC<CartItemProps> = ({ item, onUpdateQuantity, onRemove })
     <View style={styles.container}>
       <View style={styles.contentContainer}>
         <View style={styles.imageContainer}>
-          {product.image_url && !imageError ? (
+          {!imageError && (localImageUri || product.image_url) ? (
             <>
               <Image 
-                source={{ uri: product.image_url }}
+                source={{ uri: localImageUri || product.image_url }}
                 style={styles.image}
                 onLoadStart={() => setImageLoading(true)}
                 onLoadEnd={() => setImageLoading(false)}
@@ -72,17 +152,23 @@ const CartItem: React.FC<CartItemProps> = ({ item, onUpdateQuantity, onRemove })
           
           <View style={styles.quantityContainer}>
             <TouchableOpacity 
-              style={styles.quantityButton} 
+              style={[styles.quantityButton, isUpdating && styles.disabledButton]} 
               onPress={decrementQuantity}
+              disabled={isUpdating}
             >
               <Feather name="minus" size={16} color="#474472" />
             </TouchableOpacity>
             
-            <Text style={styles.quantity}>{quantity}</Text>
+            {isUpdating ? (
+              <ActivityIndicator size="small" color="#b9b1f0" style={styles.quantityLoader} />
+            ) : (
+              <Text style={styles.quantity}>{localQuantity}</Text>
+            )}
             
             <TouchableOpacity 
-              style={styles.quantityButton} 
+              style={[styles.quantityButton, isUpdating && styles.disabledButton]} 
               onPress={incrementQuantity}
+              disabled={isUpdating}
             >
               <Feather name="plus" size={16} color="#474472" />
             </TouchableOpacity>
@@ -94,8 +180,9 @@ const CartItem: React.FC<CartItemProps> = ({ item, onUpdateQuantity, onRemove })
         <TouchableOpacity 
           style={styles.removeButton}
           onPress={() => onRemove(item.id)}
+          disabled={isUpdating}
         >
-          <Feather name="trash-2" size={18} color="#ff6b6b" />
+          <Feather name="trash-2" size={18} color={isUpdating ? "#ccc" : "#ff6b6b"} />
         </TouchableOpacity>
         
         <Text style={styles.totalPrice}>${itemTotal.toFixed(2)}</Text>
@@ -195,6 +282,13 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#b9b1f0',
+  },
+  disabledButton: {
+    opacity: 0.5,
+  },
+  quantityLoader: {
+    marginHorizontal: 12,
+    minWidth: 20,
   },
 });
 

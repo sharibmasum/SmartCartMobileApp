@@ -12,7 +12,13 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSCameraUsageDescription": "This app uses the camera to scan product barcodes.",
-        "NSPhotoLibraryUsageDescription": "This app needs access to your photo library to upload product images."
+        "NSPhotoLibraryUsageDescription": "This app needs access to your photo library to upload product images.",
+        "UISupportedInterfaceOrientations": [
+          "UIInterfaceOrientationPortrait"
+        ],
+        "UISupportedInterfaceOrientations~ipad": [
+          "UIInterfaceOrientationPortrait"
+        ]
       }
     },
     "android": {
@@ -24,7 +30,8 @@
         "CAMERA",
         "READ_EXTERNAL_STORAGE",
         "WRITE_EXTERNAL_STORAGE"
-      ]
+      ],
+      "screenOrientation": "portrait"
     },
     "web": {
       "bundler": "metro",
@@ -58,6 +65,13 @@
         "expo-image-picker",
         {
           "photosPermission": "Allow SmartCart to access your photos to upload product images."
+        }
+      ],
+      "expo-screen-orientation",
+      [
+        "expo-file-system",
+        {
+          "filePermissions": true
         }
       ]
     ],

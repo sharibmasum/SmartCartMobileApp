@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { View, StyleSheet, Text, Image, ScrollView, ActivityIndicator, TouchableOpacity, Alert } from 'react-native';
 import { supabase } from '../../lib/supabase';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -8,6 +8,7 @@ import { StatusBar } from 'expo-status-bar';
 import { Theme } from '../../theme';
 import CartItem from '../../components/cart/CartItem';
 import Button from '../../components/ui/Button';
+import { MaterialIcons } from '@expo/vector-icons';
 
 // Default demo user ID used across the app
 const DEMO_USER_ID = '550e8400-e29b-41d4-a716-446655440000';
@@ -59,16 +60,33 @@ const CartPage = () => {
     loadLatestCart();
   }, []);
 
-  // Calculate cart totals
-  const { subtotal, tax, total, itemCount } = getCartTotals();
+  // Calculate cart totals with useMemo to avoid unnecessary recalculations
+  const { subtotal, tax, total, itemCount } = useMemo(() => {
+    return getCartTotals();
+  }, [cart, getCartTotals]);
 
   // Handle quantity changes
   const handleQuantityChange = useCallback(async (itemId: string, newQuantity: number) => {
     if (newQuantity <= 0) {
       return handleRemoveItem(itemId);
     }
-    await updateItemQuantity(itemId, newQuantity);
-  }, [updateItemQuantity]);
+
+    try {
+      setIsRefreshing(true);
+      
+      // Perform the actual update
+      await updateItemQuantity(itemId, newQuantity);
+      
+      // Explicitly refresh the cart to ensure latest data
+      await loadCart(true);
+    } catch (error) {
+      console.error('Failed to update quantity:', error);
+      // If there was an error, reload the cart to get the correct state
+      await loadCart(true);
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [updateItemQuantity, loadCart]);
 
   // Handle remove item
   const handleRemoveItem = useCallback(async (itemId: string) => {
@@ -113,6 +131,14 @@ const CartPage = () => {
     return (
       <SafeAreaView style={styles.container}>
         <StatusBar style="dark" />
+        <View style={styles.emptyHeader}>
+          <TouchableOpacity 
+            style={styles.backButton} 
+            onPress={() => router.push('/(main)/scanner')}
+          >
+            <MaterialIcons name="arrow-back" size={24} color="#333" />
+          </TouchableOpacity>
+        </View>
         <View style={styles.errorContainer}>
           <Text style={styles.errorTitle}>Unable to load cart</Text>
           <Text style={styles.errorText}>{error}</Text>
@@ -142,6 +168,14 @@ const CartPage = () => {
     return (
       <SafeAreaView style={styles.container}>
         <StatusBar style="dark" />
+        <View style={styles.emptyHeader}>
+          <TouchableOpacity 
+            style={styles.backButton} 
+            onPress={() => router.push('/(main)/scanner')}
+          >
+            <MaterialIcons name="arrow-back" size={24} color="#333" />
+          </TouchableOpacity>
+        </View>
         <View style={styles.centeredContainer}>
           <ActivityIndicator size="large" color={Theme.colors.primary} />
           <Text style={styles.loadingText}>Loading your cart...</Text>
@@ -155,6 +189,14 @@ const CartPage = () => {
     return (
       <SafeAreaView style={styles.container}>
         <StatusBar style="dark" />
+        <View style={styles.emptyHeader}>
+          <TouchableOpacity 
+            style={styles.backButton} 
+            onPress={() => router.push('/(main)/scanner')}
+          >
+            <MaterialIcons name="arrow-back" size={24} color="#333" />
+          </TouchableOpacity>
+        </View>
         <View style={styles.centeredContainer}>
           <View style={styles.emptyStateImagePlaceholder}>
             <Text style={styles.emptyStateIcon}>🛒</Text>
@@ -165,7 +207,7 @@ const CartPage = () => {
           </Text>
           <Button
             title="Start Shopping"
-            onPress={() => router.push('/')}
+            onPress={() => router.push('/(main)/scanner')}
             style={styles.shopButton}
           />
         </View>
@@ -179,7 +221,15 @@ const CartPage = () => {
       <StatusBar style="dark" />
 
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Shopping Cart</Text>
+        <View style={styles.headerLeft}>
+          <TouchableOpacity 
+            style={styles.backButton} 
+            onPress={() => router.push('/(main)/scanner')}
+          >
+            <MaterialIcons name="arrow-back" size={24} color="#333" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Shopping Cart</Text>
+        </View>
         <Text style={styles.itemCount}>{itemCount} {itemCount === 1 ? 'item' : 'items'}</Text>
       </View>
 
@@ -197,7 +247,7 @@ const CartPage = () => {
       >
         {cart.items.map((item) => (
           <CartItem
-            key={item.id}
+            key={`${item.id}-${item.quantity}-${item.updated_at}`}
             item={item}
             onUpdateQuantity={handleQuantityChange}
             onRemove={handleRemoveItem}
@@ -233,7 +283,7 @@ const CartPage = () => {
         />
         <TouchableOpacity
           style={styles.continueShoppingButton}
-          onPress={() => router.push('/')}
+          onPress={() => router.push('/(main)/scanner')}
         >
           <Text style={styles.continueShoppingText}>Continue Shopping</Text>
         </TouchableOpacity>
@@ -262,6 +312,14 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#eee',
     backgroundColor: '#fff',
+  },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  backButton: {
+    padding: 8,
+    marginRight: 6,
   },
   headerTitle: {
     fontSize: 24,
@@ -343,6 +401,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     borderTopWidth: 1,
     borderTopColor: '#eee',
+    paddingBottom: 40,
   },
   checkoutButton: {
     paddingVertical: 14,
@@ -432,6 +491,12 @@ const styles = StyleSheet.create({
     color: '#474472',
     fontSize: 16,
     fontWeight: '500',
+  },
+  emptyHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
   },
 });
 
