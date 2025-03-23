@@ -23,10 +23,13 @@ Watch our application demo: [SmartCart Demo Video](https://drive.google.com/file
 
 Below are screenshots showcasing the app's intuitive user interface:
 
-1. **Item scanning and detection**
-2. **Shopping cart management with item quantities**
-3. **Order summary with checkout options**
-4. **User authentication screen**
+**User authentication screen**
+![IMG_7101](https://github.com/user-attachments/assets/736c858c-d14d-43a0-8e9a-6e52e9dd68a9)
+
+**Item scanning and detection**
+
+**Shopping cart management with item quantities**
+**Order summary with checkout options**
 
 ## API Setup
 
