@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { View, StyleSheet, Text, Image, ScrollView, ActivityIndicator, TouchableOpacity, Alert } from 'react-native';
 import { supabase } from '../../lib/supabase';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useCart } from '../../hooks/useCart';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -15,6 +15,7 @@ const DEMO_USER_ID = '550e8400-e29b-41d4-a716-446655440000';
 const CartPage = () => {
   const [userId, setUserId] = useState<string>(DEMO_USER_ID);
   const isDemoUser = userId === DEMO_USER_ID;
+  const { refresh } = useLocalSearchParams<{ refresh?: string }>();
   
   const [isRefreshing, setIsRefreshing] = useState(false);
   
@@ -38,6 +39,25 @@ const CartPage = () => {
     removeItem,
     checkout,
   } = useCart(userId);
+
+  // Load cart when component mounts or when userId changes or when refresh param is present
+  useEffect(() => {
+    // Force refresh the cart to get the latest data
+    loadCart(true);
+    
+    // For debugging - log the cart items
+    console.log('Cart page mounted with refresh param:', refresh);
+  }, [userId, loadCart, refresh]);
+  
+  // Add another effect to force refresh when focusing the screen
+  useEffect(() => {
+    // This will run when the component mounts
+    const loadLatestCart = async () => {
+      await loadCart(true);
+    };
+    
+    loadLatestCart();
+  }, []);
 
   // Calculate cart totals
   const { subtotal, tax, total, itemCount } = getCartTotals();
@@ -209,6 +229,7 @@ const CartPage = () => {
           title="Proceed to Checkout"
           onPress={handleCheckout}
           style={styles.checkoutButton}
+          textStyle={styles.checkoutButtonText}
         />
         <TouchableOpacity
           style={styles.continueShoppingButton}
@@ -224,7 +245,7 @@ const CartPage = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Theme.colors.background,
+    backgroundColor: '#f9f9f9',
   },
   centeredContainer: {
     flex: 1,
@@ -239,27 +260,28 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: Theme.colors.border,
+    borderBottomColor: '#eee',
+    backgroundColor: '#fff',
   },
   headerTitle: {
     fontSize: 24,
     fontWeight: '600',
-    color: Theme.colors.text,
+    color: '#333',
   },
   itemCount: {
     fontSize: 16,
-    color: Theme.colors.secondaryText,
+    color: '#666',
   },
   refreshingIndicator: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     padding: 8,
-    backgroundColor: Theme.colors.lightBackground,
+    backgroundColor: '#f0eeff',
   },
   refreshingText: {
     marginLeft: 8,
-    color: Theme.colors.primary,
+    color: '#474472',
     fontSize: 14,
   },
   cartItemsContainer: {
@@ -272,7 +294,7 @@ const styles = StyleSheet.create({
   summaryContainer: {
     marginTop: 24,
     padding: 16,
-    backgroundColor: Theme.colors.white,
+    backgroundColor: '#fff',
     borderRadius: 12,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
@@ -284,7 +306,7 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
     marginBottom: 16,
-    color: Theme.colors.text,
+    color: '#333',
   },
   summaryRow: {
     flexDirection: 'row',
@@ -293,37 +315,42 @@ const styles = StyleSheet.create({
   },
   summaryLabel: {
     fontSize: 16,
-    color: Theme.colors.secondaryText,
+    color: '#666',
   },
   summaryValue: {
     fontSize: 16,
     fontWeight: '500',
-    color: Theme.colors.text,
+    color: '#333',
   },
   totalRow: {
     marginTop: 8,
     paddingTop: 16,
     borderTopWidth: 1,
-    borderTopColor: Theme.colors.border,
+    borderTopColor: '#eee',
   },
   totalLabel: {
     fontSize: 18,
     fontWeight: '600',
-    color: Theme.colors.text,
+    color: '#333',
   },
   totalValue: {
     fontSize: 18,
     fontWeight: '700',
-    color: Theme.colors.primary,
+    color: '#474472',
   },
   checkoutContainer: {
     padding: 16,
-    backgroundColor: Theme.colors.white,
+    backgroundColor: '#fff',
     borderTopWidth: 1,
-    borderTopColor: Theme.colors.border,
+    borderTopColor: '#eee',
   },
   checkoutButton: {
     paddingVertical: 14,
+    backgroundColor: '#b9b1f0',
+  },
+  checkoutButtonText: {
+    color: 'black',
+    fontWeight: '600',
   },
   continueShoppingButton: {
     alignItems: 'center',
@@ -331,7 +358,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   continueShoppingText: {
-    color: Theme.colors.primary,
+    color: '#b9b1f0',
     fontSize: 16,
     fontWeight: '500',
   },
@@ -339,7 +366,7 @@ const styles = StyleSheet.create({
     width: 200,
     height: 200,
     borderRadius: 100,
-    backgroundColor: Theme.colors.lightBackground,
+    backgroundColor: '#f0eeff',
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 24,
@@ -351,21 +378,22 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '600',
     marginBottom: 8,
-    color: Theme.colors.text,
+    color: '#333',
   },
   emptyCartText: {
     fontSize: 16,
-    color: Theme.colors.secondaryText,
+    color: '#666',
     textAlign: 'center',
     marginBottom: 24,
   },
   shopButton: {
     minWidth: 200,
+    backgroundColor: '#474472',
   },
   loadingText: {
     marginTop: 16,
     fontSize: 16,
-    color: Theme.colors.secondaryText,
+    color: '#666',
   },
   errorContainer: {
     flex: 1,
@@ -376,32 +404,32 @@ const styles = StyleSheet.create({
   errorTitle: {
     fontSize: 20,
     fontWeight: '600',
-    color: Theme.colors.error,
+    color: '#ff6b6b',
     marginBottom: 12,
   },
   errorText: {
     fontSize: 16,
-    color: Theme.colors.text,
+    color: '#333',
     textAlign: 'center',
     marginBottom: 8,
   },
   errorDetail: {
     fontSize: 14,
-    color: Theme.colors.secondaryText,
+    color: '#666',
     textAlign: 'center',
     marginBottom: 24,
     paddingHorizontal: 24,
   },
   retryButton: {
-    backgroundColor: Theme.colors.lightBackground,
+    backgroundColor: '#f0eeff',
     paddingHorizontal: 24,
     paddingVertical: 12,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: Theme.colors.primary,
+    borderColor: '#b9b1f0',
   },
   retryText: {
-    color: Theme.colors.primary,
+    color: '#474472',
     fontSize: 16,
     fontWeight: '500',
   },

@@ -107,8 +107,9 @@ export default function RegisterScreen() {
                 loading={loading}
                 disabled={loading}
                 style={styles.button}
+                labelStyle={{ color: 'black' }}
               >
-                Register
+                {loading ? 'Registering...' : 'Register'}
               </Button>
 
               <View style={styles.loginContainer}>

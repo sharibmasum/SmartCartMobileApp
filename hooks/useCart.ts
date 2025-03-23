@@ -77,6 +77,12 @@ export const useCart = (userId: string) => {
       
       if (storedCart) {
         const parsedCart = JSON.parse(storedCart) as Cart;
+        
+        // Ensure the cart has all required properties
+        if (!parsedCart.items) {
+          parsedCart.items = [];
+        }
+        
         setCart(parsedCart);
         
         // Store the cartId for reference
@@ -196,7 +202,7 @@ export const useCart = (userId: string) => {
       if (isDemoUser) {
         // Make sure we have a cart
         if (!cart) {
-          await loadCart();
+          await loadCart(true); // Force refresh the cart
           if (!cart) {
             // If still no cart, create one
             const newCart: Cart = {
@@ -210,6 +216,7 @@ export const useCart = (userId: string) => {
             };
             setCart(newCart);
             cartIdRef.current = newCart.id;
+            await persistCart(newCart);
           }
         }
         
@@ -241,16 +248,16 @@ export const useCart = (userId: string) => {
             updatedCart.updated_at = new Date().toISOString();
           }
           
-          // Update state and storage
+          // Update state with the new cart
           setCart(updatedCart);
+          
+          // Make sure to persist the updated cart immediately
           await persistCart(updatedCart);
           
           // Return the added/updated item
           const itemIndex = existingItemIndex >= 0 ? existingItemIndex : updatedCart.items.length - 1;
           return updatedCart.items[itemIndex];
         }
-        
-        return null;
       }
       
       // Regular flow for authenticated users - add to database AND local cart for resilience

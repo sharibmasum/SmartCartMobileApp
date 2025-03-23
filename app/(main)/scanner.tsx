@@ -8,6 +8,8 @@ import {
   SafeAreaView,
   StatusBar,
   Alert,
+  Modal,
+  Animated,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { router } from 'expo-router';
@@ -16,6 +18,8 @@ import { useCart } from '../../hooks/useCart';
 import { recognizeFoodWithVision } from '../../services/vision';
 import { supabase } from '../../services/supabase';
 import { logout } from '../../services/auth';
+import Button from '../../components/ui/Button';
+import { Theme } from '../../theme';
 
 // Define interfaces for our state
 interface ScannedItem {
@@ -97,6 +101,14 @@ export default function Scanner() {
   const [facing, setFacing] = useState<'back' | 'front'>('back');
   const cameraRef = useRef<any>(null);
   const [userId, setUserId] = useState<string>(DEMO_USER_ID); // Initialize with demo UUID
+  const [showSettings, setShowSettings] = useState(false);
+  const [showDetectedItem, setShowDetectedItem] = useState(false);
+  const [detectedProduct, setDetectedProduct] = useState<any>(null);
+  const [showSuccessPopup, setShowSuccessPopup] = useState(false);
+  const successPopupAnim = useRef(new Animated.Value(0)).current;
+  
+  // Animated value for slide-up panel
+  const slideUpAnim = useRef(new Animated.Value(0)).current;
   
   // Get the current user ID
   useEffect(() => {
@@ -135,6 +147,51 @@ export default function Scanner() {
       }
     })();
   }, [permission, requestPermission]);
+
+  // Animation for slide-up panel
+  useEffect(() => {
+    if (showDetectedItem) {
+      Animated.spring(slideUpAnim, {
+        toValue: 1,
+        useNativeDriver: true,
+        tension: 50,
+        friction: 7,
+      }).start();
+    } else {
+      Animated.spring(slideUpAnim, {
+        toValue: 0,
+        useNativeDriver: true,
+        tension: 50,
+        friction: 7,
+      }).start();
+    }
+  }, [showDetectedItem, slideUpAnim]);
+
+  // Animation for success popup
+  useEffect(() => {
+    if (showSuccessPopup) {
+      // Animate in
+      Animated.sequence([
+        Animated.timing(successPopupAnim, {
+          toValue: 1,
+          duration: 300,
+          useNativeDriver: true,
+        }),
+        // Hold for 1.5 seconds
+        Animated.delay(1500),
+        // Animate out
+        Animated.timing(successPopupAnim, {
+          toValue: 0,
+          duration: 300,
+          useNativeDriver: true,
+        })
+      ]).start(({ finished }) => {
+        if (finished) {
+          setShowSuccessPopup(false);
+        }
+      });
+    }
+  }, [showSuccessPopup, successPopupAnim]);
 
   const takePicture = async () => {
     if (!cameraRef.current) return null;
@@ -212,40 +269,10 @@ export default function Scanner() {
           return;
         }
         
-        // Show add to cart option
-        Alert.alert(
-          "Food Item Detected",
-          `${databaseProduct.name}\nPrice: $${databaseProduct.price.toFixed(2)}\n\nWould you like to add this to your cart?`,
-          [
-            {
-              text: "Cancel",
-              style: "cancel",
-              onPress: () => setScanning(false)
-            },
-            {
-              text: "Add to Cart",
-              onPress: async () => {
-                try {
-                  // First close the current dialog to prevent UI freezing
-                  setScanning(false);
-                  
-                  // Add existing product from database to cart
-                  const result = await addProductToCart(databaseProduct, 1);
-                  
-                  // Show success message after operation completes
-                  Alert.alert("Success", "Item added to cart!");
-                } catch (error) {
-                  // Log the error but don't show it to the user
-                  logError('Error adding to cart:', error);
-                  
-                  // Still show success since the item was added to the local cart
-                  Alert.alert("Success", "Item added to cart!");
-                }
-              }
-            }
-          ],
-          { cancelable: false }
-        );
+        // Show product in slide-up panel
+        setDetectedProduct(databaseProduct);
+        setShowDetectedItem(true);
+        setScanning(false);
       } catch (dbError) {
         logError('Database error:', dbError);
         Alert.alert(
@@ -261,6 +288,49 @@ export default function Scanner() {
     }
   }, [scanning, cartLoading, takePicture, addProductToCart]);
 
+  const handleCancelAddToCart = useCallback(() => {
+    // First start the animation to slide down
+    Animated.timing(slideUpAnim, {
+      toValue: 0,
+      duration: 300,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      // Only hide the panel after animation completes
+      if (finished) {
+        setShowDetectedItem(false);
+        setDetectedProduct(null);
+      }
+    });
+  }, [slideUpAnim]);
+
+  const handleAddToCart = useCallback(async () => {
+    if (!detectedProduct) return;
+    
+    try {
+      // Add product to cart
+      const result = await addProductToCart(detectedProduct, 1);
+      
+      // Animate panel sliding down
+      Animated.timing(slideUpAnim, {
+        toValue: 0,
+        duration: 300,
+        useNativeDriver: true,
+      }).start(({ finished }) => {
+        // Only hide the panel after animation completes
+        if (finished) {
+          setShowDetectedItem(false);
+          setDetectedProduct(null);
+          
+          // Show success popup instead of Alert
+          setShowSuccessPopup(true);
+        }
+      });
+    } catch (error) {
+      logError('Error adding to cart:', error);
+      Alert.alert("Error", "Failed to add item to cart. Please try again.");
+    }
+  }, [detectedProduct, addProductToCart, slideUpAnim]);
+
   const toggleFlash = () => {
     setFlash(!flash);
   };
@@ -270,7 +340,11 @@ export default function Scanner() {
   };
 
   const goToCart = () => {
-    router.push('/(main)/cart');
+    // Force a unique refresh value each time to guarantee a refresh
+    router.push({
+      pathname: '/(main)/cart',
+      params: { refresh: Date.now().toString() }
+    });
   };
 
   // Handle logout
@@ -284,6 +358,11 @@ export default function Scanner() {
     }
   };
 
+  // Handle settings button press
+  const handleSettings = () => {
+    setShowSettings(true);
+  };
+
   if (permission === undefined) {
     return <View style={styles.container}><Text>Requesting camera permission...</Text></View>;
   }
@@ -292,84 +371,176 @@ export default function Scanner() {
     return <View style={styles.container}><Text>No access to camera</Text></View>;
   }
 
+  // Calculate transform for slide-up animation
+  const slideUpStyle = {
+    transform: [
+      {
+        translateY: slideUpAnim.interpolate({
+          inputRange: [0, 1],
+          outputRange: [300, 0],
+        }),
+      },
+    ],
+    opacity: slideUpAnim,
+  };
+
+  // Calculate transform for success popup animation
+  const successPopupStyle = {
+    opacity: successPopupAnim,
+    transform: [
+      {
+        translateY: successPopupAnim.interpolate({
+          inputRange: [0, 1],
+          outputRange: [-20, 0],
+        }),
+      },
+    ],
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" />
       
-      <View style={styles.topBar}>
-        {/* Logout Button */}
-        <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-          <MaterialIcons name="logout" size={24} color="#000" />
-          <Text style={styles.logoutButtonText}>Logout</Text>
-        </TouchableOpacity>
-        
-        {/* Cart Button */}
-        <TouchableOpacity style={styles.cartButton} onPress={goToCart}>
-          <Text style={styles.cartButtonText}>View Cart</Text>
-          <MaterialIcons name="shopping-cart" size={24} color="#000" />
-        </TouchableOpacity>
-      </View>
-
-      {/* Detected Item */}
-      {scannedItem && (
-        <View style={styles.detectedItemContainer}>
-          <Text style={styles.detectedItemText}>{scannedItem.name}</Text>
-          <View style={styles.checkmark}>
-            <Text style={styles.checkmarkText}>✓</Text>
+      {/* Settings Menu Modal */}
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={showSettings}
+        onRequestClose={() => setShowSettings(false)}
+        presentationStyle="overFullScreen"
+      >
+        <View style={styles.modalView}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Settings</Text>
+            
+            <TouchableOpacity 
+              style={styles.modalOption}
+              onPress={() => {
+                setShowSettings(false);
+                handleLogout();
+              }}
+            >
+              <MaterialIcons name="logout" size={24} color="#000" />
+              <Text style={styles.modalOptionText}>Logout</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={styles.modalCloseButton}
+              onPress={() => setShowSettings(false)}
+            >
+              <Text style={styles.modalCloseText}>Close</Text>
+            </TouchableOpacity>
           </View>
         </View>
+      </Modal>
+      
+      {/* Success Popup */}
+      {showSuccessPopup && (
+        <Animated.View style={[styles.successPopup, successPopupStyle]}>
+          <View style={styles.successPopupContent}>
+            <MaterialIcons name="check-circle" size={24} color="#fff" style={styles.successIcon} />
+            <Text style={styles.successPopupText}>Item added to cart!</Text>
+          </View>
+        </Animated.View>
       )}
-
-      {/* Camera View */}
-      <View style={styles.cameraContainer}>
-        <CameraView 
-          ref={cameraRef}
-          style={styles.camera} 
-          facing={facing}
-          enableTorch={flash}
-        />
-        
-        {/* Camera Controls */}
-        <View style={styles.cameraControls}>
-          <TouchableOpacity onPress={toggleFlash} style={styles.cameraButton}>
-            <MaterialIcons 
-              name={flash ? "flash-on" : "flash-off"} 
-              size={24} 
-              color="#fff" 
-            />
+      
+      {/* Main Content */}
+      <View style={styles.mainContent}>
+        {/* Top section with settings gear and cart button */}
+        <View style={styles.header}>
+          <TouchableOpacity style={styles.cartButton} onPress={goToCart}>
+            <Text style={styles.cartButtonText}>View Cart</Text>
+            <MaterialIcons name="shopping-cart" size={24} color="#000" />
           </TouchableOpacity>
           
-          <TouchableOpacity onPress={toggleCamera} style={styles.cameraButton}>
-            <MaterialIcons name="flip-camera-ios" size={24} color="#fff" />
+          <TouchableOpacity style={styles.settingsButton} onPress={handleSettings}>
+            <MaterialIcons name="settings" size={24} color="#333" />
           </TouchableOpacity>
         </View>
         
-        {/* Scanner Guidelines */}
-        <View style={styles.scannerGuidelines}>
-          <View style={styles.guidelineCorner} />
-          <View style={[styles.guidelineCorner, {top: 0, right: 0, transform: [{rotate: '90deg'}]}]} />
-          <View style={[styles.guidelineCorner, {bottom: 0, right: 0, transform: [{rotate: '180deg'}]}]} />
-          <View style={[styles.guidelineCorner, {bottom: 0, left: 0, transform: [{rotate: '270deg'}]}]} />
-        </View>
-        
-        {/* Scanning Indicator */}
-        {scanning && (
-          <View style={styles.scanningIndicator}>
-            <Text style={styles.scanningText}>scanning...</Text>
+        {/* Detected Item */}
+        {scannedItem && (
+          <View style={styles.detectedItemContainer}>
+            <Text style={styles.detectedItemText}>{scannedItem.name}</Text>
+            <View style={styles.checkmark}>
+              <Text style={styles.checkmarkText}>✓</Text>
+            </View>
           </View>
         )}
+
+        {/* Camera View */}
+        <View style={styles.cameraContainer}>
+          <CameraView 
+            ref={cameraRef}
+            style={styles.camera} 
+            facing={facing}
+            enableTorch={flash}
+          />
+          
+          {/* Camera Controls */}
+          <View style={styles.cameraControls}>
+            <TouchableOpacity onPress={toggleFlash} style={styles.cameraButton}>
+              <MaterialIcons 
+                name={flash ? "flash-on" : "flash-off"} 
+                size={24} 
+                color="#fff" 
+              />
+            </TouchableOpacity>
+            
+            <TouchableOpacity onPress={toggleCamera} style={styles.cameraButton}>
+              <MaterialIcons name="flip-camera-ios" size={24} color="#fff" />
+            </TouchableOpacity>
+          </View>
+          
+          {/* Scanner Guidelines */}
+          <View style={styles.scannerGuidelines}>
+           
+          </View>
+        </View>
+
+        {/* Scan Button */}
+        <TouchableOpacity 
+          style={[styles.scanButton, (scanning || cartLoading) && styles.disabledButton]}
+          onPress={handleScan}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.scanButtonText}>
+            {scanning ? 'Scanning...' : 'Scan Item'}
+          </Text>
+        </TouchableOpacity>
       </View>
 
-      {/* Scan Button */}
-      <TouchableOpacity 
-        style={[styles.scanButton, (scanning || cartLoading) && styles.disabledButton]}
-        onPress={handleScan}
-        activeOpacity={0.7}
-      >
-        <Text style={styles.scanButtonText}>
-          {scanning ? 'Scanning...' : 'Scan Item'}
-        </Text>
-      </TouchableOpacity>
+      {/* Detected Food Item Slide-up Panel */}
+      {showDetectedItem && detectedProduct && (
+        <Animated.View style={[styles.detectedItemPanel, slideUpStyle]}>
+          <View style={styles.detectedItemPanelContent}>
+            <Text style={styles.detectedItemPanelTitle}>Food Item Detected</Text>
+            
+            <Text style={styles.detectedItemPanelName}>{detectedProduct.name}</Text>
+            <Text style={styles.detectedItemPanelPrice}>${detectedProduct.price.toFixed(2)}</Text>
+            
+            <Text style={styles.detectedItemPanelQuestion}>
+              Would you like to add this to your cart?
+            </Text>
+            
+            <View style={styles.detectedItemPanelButtons}>
+              <TouchableOpacity 
+                style={styles.cancelButton}
+                onPress={handleCancelAddToCart}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={styles.addToCartButton}
+                onPress={handleAddToCart}
+              >
+                <Text style={styles.addToCartButtonText}>Add to Cart</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Animated.View>
+      )}
     </SafeAreaView>
   );
 }
@@ -377,73 +548,68 @@ export default function Scanner() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: 'white',
   },
-  topBar: {
+  mainContent: {
+    flex: 1,
+    paddingVertical: 5,
+  },
+  header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginHorizontal: 20,
-    marginTop: 20,
+    paddingTop: 15,
+    paddingBottom: 10,
+    paddingHorizontal: 20,
   },
-  logoutButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFB19C',
+  settingsButton: {
     padding: 10,
-    borderRadius: 25,
-  },
-  logoutButtonText: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#000',
-    marginLeft: 5,
   },
   cartButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#B19CFF',
-    padding: 15,
+    backgroundColor: '#b9b1f0', // Light purple button color
+    paddingVertical: 12,
+    paddingHorizontal: 20,
     borderRadius: 25,
   },
   cartButtonText: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: 'bold',
     color: '#000',
-    marginRight: 10,
-  },
-  cartIcon: {
-    width: 24,
-    height: 24,
+    marginRight: 5,
   },
   detectedItemContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
-    marginTop: 20,
+    marginTop: 10,
+    marginBottom: 10,
   },
   detectedItemText: {
     fontSize: 20,
     fontWeight: 'bold',
+    color: '#000',
   },
   checkmark: {
     width: 30,
     height: 30,
     borderRadius: 15,
-    backgroundColor: '#ACFFAC',
+    backgroundColor: '#000',
     alignItems: 'center',
     justifyContent: 'center',
   },
   checkmarkText: {
     fontSize: 18,
-    color: '#000',
+    color: '#fff',
   },
   cameraContainer: {
     flex: 1,
-    marginTop: 20,
     marginHorizontal: 20,
+    marginTop: 15,
+    marginBottom: 15,
     borderRadius: 20,
     overflow: 'hidden',
     position: 'relative',
@@ -456,12 +622,13 @@ const styles = StyleSheet.create({
     top: 20,
     right: 20,
     flexDirection: 'column',
+    zIndex: 10,
   },
   cameraButton: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(0,0,0,0.7)',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 15,
@@ -473,49 +640,181 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
   },
-  guidelineCorner: {
-    position: 'absolute',
-    width: 40,
-    height: 40,
-    borderColor: '#fff',
-    borderWidth: 3,
-    borderTopWidth: 3,
-    borderLeftWidth: 3,
-    borderRightWidth: 0,
-    borderBottomWidth: 0,
-    borderTopLeftRadius: 10,
-    top: 0,
-    left: 0,
-    opacity: 0.8,
-  },
-  scanningIndicator: {
-    position: 'absolute',
-    bottom: 20,
-    alignSelf: 'center',
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 20,
-  },
-  scanningText: {
-    color: '#fff',
-    fontSize: 16,
-  },
+
   scanButton: {
-    backgroundColor: '#53B175',
+    backgroundColor: '#b3a7e3', // Purple to match requested color
     marginHorizontal: 20,
-    marginBottom: 20,
-    padding: 15,
-    borderRadius: 10,
+    marginBottom: 30,
+    marginTop: 15,
+    padding: 16,
+    borderRadius: 25,
     alignItems: 'center',
   },
   scanButtonText: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: 'bold',
-    color: '#fff',
+    color: 'black',
   },
   disabledButton: {
-    backgroundColor: '#a0d4b1',
-    opacity: 0.8,
+    backgroundColor: '#474472',
+    opacity: 0.9,
+  },
+  modalView: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'transparent',
+  },
+  modalContent: {
+    width: '80%',
+    backgroundColor: 'white',
+    borderRadius: 20,
+    padding: 20,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5
+  },
+  modalTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    marginBottom: 20,
+  },
+  modalOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '100%',
+    padding: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  modalOptionText: {
+    fontSize: 18,
+    marginLeft: 15,
+  },
+  modalCloseButton: {
+    marginTop: 20,
+    backgroundColor: '#ddd',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 20,
+  },
+  modalCloseText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  // Slide-up panel styles
+  detectedItemPanel: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    overflow: 'hidden',
+  },
+  detectedItemPanelContent: {
+    backgroundColor: '#fff',
+    padding: 24,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+  },
+  detectedItemPanelTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#000',
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  detectedItemPanelName: {
+    fontSize: 20,
+    color: '#000',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  detectedItemPanelPrice: {
+    fontSize: 18,
+    color: '#b9b1f0',
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  detectedItemPanelQuestion: {
+    fontSize: 16,
+    color: '#666',
+    textAlign: 'center',
+    marginBottom: 24,
+  },
+  detectedItemPanelButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    borderTopWidth: 1,
+    borderTopColor: '#eee',
+    paddingTop: 16,
+  },
+  cancelButton: {
+    flex: 1,
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginRight: 8,
+    backgroundColor: '#f5f5f5',
+    borderRadius: 8,
+  },
+  cancelButtonText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#666',
+  },
+  addToCartButton: {
+    flex: 1,
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginLeft: 8,
+    backgroundColor: '#b9b1f0',
+    borderRadius: 8,
+  },
+  addToCartButtonText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#000',
+  },
+  // Success popup styles
+  successPopup: {
+    position: 'absolute',
+    top: 100,
+    left: 20,
+    right: 20,
+    zIndex: 1000,
+    alignItems: 'center',
+  },
+  successPopupContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#474472',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  successIcon: {
+    marginRight: 8,
+  },
+  successPopupText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });

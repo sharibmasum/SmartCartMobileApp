@@ -2,14 +2,22 @@ import { Tabs } from 'expo-router';
 import { useTheme } from 'react-native-paper';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
+// Define our purple color
+const PURPLE_COLOR = '#b3a7e3';
+
 export default function MainLayout() {
   const theme = useTheme();
 
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: theme.colors.primary,
+        tabBarActiveTintColor: PURPLE_COLOR,
+        tabBarInactiveTintColor: '#888',
         headerShown: false,
+        tabBarStyle: {
+          backgroundColor: 'white',
+          borderTopColor: '#eee',
+        },
       }}
     >
       <Tabs.Screen

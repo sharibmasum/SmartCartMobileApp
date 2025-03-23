@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, Image, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, Image, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { CartItem as CartItemType } from '../../types/cart.types';
 import { Theme } from '../../theme';
 import { Feather } from '@expo/vector-icons';
@@ -12,6 +12,8 @@ interface CartItemProps {
 
 const CartItem: React.FC<CartItemProps> = ({ item, onUpdateQuantity, onRemove }) => {
   const { product, quantity } = item;
+  const [imageLoading, setImageLoading] = React.useState(true);
+  const [imageError, setImageError] = React.useState(false);
   
   if (!product) {
     return null;
@@ -30,20 +32,38 @@ const CartItem: React.FC<CartItemProps> = ({ item, onUpdateQuantity, onRemove })
       onRemove(item.id);
     }
   };
+
+  // Function to handle image errors
+  const handleImageError = () => {
+    setImageLoading(false);
+    setImageError(true);
+  };
   
   return (
     <View style={styles.container}>
       <View style={styles.contentContainer}>
-        {product.image_url ? (
-          <Image 
-            source={{ uri: product.image_url }}
-            style={styles.image}
-          />
-        ) : (
-          <View style={[styles.image, styles.placeholderImage]}>
-            <Feather name="image" size={24} color={Theme.colors.secondaryText} />
-          </View>
-        )}
+        <View style={styles.imageContainer}>
+          {product.image_url && !imageError ? (
+            <>
+              <Image 
+                source={{ uri: product.image_url }}
+                style={styles.image}
+                onLoadStart={() => setImageLoading(true)}
+                onLoadEnd={() => setImageLoading(false)}
+                onError={handleImageError}
+              />
+              {imageLoading && (
+                <View style={styles.imageLoadingContainer}>
+                  <ActivityIndicator size="small" color="#b9b1f0" />
+                </View>
+              )}
+            </>
+          ) : (
+            <View style={[styles.image, styles.placeholderImage]}>
+              <Feather name="image" size={24} color="#b9b1f0" />
+            </View>
+          )}
+        </View>
         
         <View style={styles.infoContainer}>
           <Text style={styles.productName} numberOfLines={1}>{product.name}</Text>
@@ -55,7 +75,7 @@ const CartItem: React.FC<CartItemProps> = ({ item, onUpdateQuantity, onRemove })
               style={styles.quantityButton} 
               onPress={decrementQuantity}
             >
-              <Feather name="minus" size={16} color={Theme.colors.text} />
+              <Feather name="minus" size={16} color="#474472" />
             </TouchableOpacity>
             
             <Text style={styles.quantity}>{quantity}</Text>
@@ -64,7 +84,7 @@ const CartItem: React.FC<CartItemProps> = ({ item, onUpdateQuantity, onRemove })
               style={styles.quantityButton} 
               onPress={incrementQuantity}
             >
-              <Feather name="plus" size={16} color={Theme.colors.text} />
+              <Feather name="plus" size={16} color="#474472" />
             </TouchableOpacity>
           </View>
         </View>
@@ -75,7 +95,7 @@ const CartItem: React.FC<CartItemProps> = ({ item, onUpdateQuantity, onRemove })
           style={styles.removeButton}
           onPress={() => onRemove(item.id)}
         >
-          <Feather name="trash-2" size={18} color={Theme.colors.error} />
+          <Feather name="trash-2" size={18} color="#ff6b6b" />
         </TouchableOpacity>
         
         <Text style={styles.totalPrice}>${itemTotal.toFixed(2)}</Text>
@@ -89,11 +109,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: Theme.colors.white,
+    backgroundColor: '#fff',
     borderRadius: 12,
     padding: 12,
     marginBottom: 12,
-    shadowColor: Theme.colors.shadow,
+    shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
@@ -104,11 +124,26 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
+  imageContainer: {
+    position: 'relative',
+    width: 60,
+    height: 60,
+  },
   image: {
     width: 60,
     height: 60,
     borderRadius: 8,
-    backgroundColor: Theme.colors.lightBackground,
+    backgroundColor: '#f5f5f5',
+  },
+  imageLoadingContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(245, 245, 245, 0.5)',
   },
   placeholderImage: {
     justifyContent: 'center',
@@ -121,12 +156,12 @@ const styles = StyleSheet.create({
   productName: {
     fontSize: 16,
     fontWeight: '600',
-    color: Theme.colors.text,
+    color: '#222',
     marginBottom: 2,
   },
   productPrice: {
     fontSize: 14,
-    color: Theme.colors.secondaryText,
+    color: '#666',
     marginBottom: 8,
   },
   quantityContainer: {
@@ -137,7 +172,7 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: Theme.colors.lightBackground,
+    backgroundColor: '#f0eeff',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -159,7 +194,7 @@ const styles = StyleSheet.create({
   totalPrice: {
     fontSize: 16,
     fontWeight: '600',
-    color: Theme.colors.primary,
+    color: '#b9b1f0',
   },
 });
 

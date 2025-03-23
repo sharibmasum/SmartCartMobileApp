@@ -57,7 +57,7 @@ const Button: React.FC<ButtonProps> = ({
       activeOpacity={0.7}
     >
       {loading ? (
-        <ActivityIndicator color={variant === 'outline' ? Theme.colors.primary : 'white'} />
+        <ActivityIndicator color={variant === 'outline' ? '#474472' : 'white'} />
       ) : (
         <Text
           style={[
@@ -83,18 +83,18 @@ const styles = StyleSheet.create({
     minHeight: 48,
   },
   primaryButton: {
-    backgroundColor: Theme.colors.primary,
+    backgroundColor: '#474472',
   },
   secondaryButton: {
-    backgroundColor: Theme.colors.secondary,
+    backgroundColor: '#b9b1f0',
   },
   outlineButton: {
     backgroundColor: 'transparent',
     borderWidth: 1,
-    borderColor: Theme.colors.primary,
+    borderColor: '#474472',
   },
   dangerButton: {
-    backgroundColor: Theme.colors.error,
+    backgroundColor: '#ff6b6b',
   },
   buttonText: {
     color: 'white',
@@ -102,14 +102,14 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   outlineText: {
-    color: Theme.colors.primary,
+    color: '#474472',
   },
   disabledButton: {
-    backgroundColor: Theme.colors.border,
+    backgroundColor: '#e0e0e0',
     opacity: 0.7,
   },
   disabledText: {
-    color: Theme.colors.secondaryText,
+    color: '#999',
   },
 });
 

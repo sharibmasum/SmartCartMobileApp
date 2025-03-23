@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { View, StyleSheet, Alert, Text, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
-import { Button, TextInput } from 'react-native-paper';
+import { Button, TextInput, useTheme } from 'react-native-paper';
 import { supabase } from '../../services/supabase';
 import { router } from 'expo-router';
 
 export default function Login() {
+  const theme = useTheme();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -97,16 +98,20 @@ export default function Login() {
           onPress={handleLogin} 
           style={styles.button}
           disabled={loading}
+          labelStyle={{ color: 'black' }}
         >
-          {loading ? <ActivityIndicator color="#fff" size="small" /> : 'Login'}
+          {loading ? <ActivityIndicator color="#000" size="small" /> : 'Login'}
         </Button>
         
         <Button 
           mode="text" 
           onPress={() => router.navigate('/(auth)/register')}
           style={styles.linkButton}
+          contentStyle={{ flexDirection: 'row', flexWrap: 'wrap' }}
+          labelStyle={null}
         >
-          Don't have an account? Sign up
+          <Text style={{ color: 'black' }}>Don't have an account? </Text>
+          <Text style={{ color: theme.colors.primary }}>Sign up</Text>
         </Button>
       </View>
     </KeyboardAvoidingView>
