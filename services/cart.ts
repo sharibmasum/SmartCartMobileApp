@@ -1,442 +1,718 @@
-import { supabase } from '../lib/supabase';
+import { supabase } from './supabase';
 import { Cart, CartItem } from '../types/cart.types';
 import { Product } from '../types/product.types';
-import { searchProducts, getProductById } from './products';
+import { v4 as uuidv4 } from 'uuid';
+import { getProductById } from './products';  // Import the getProductById function
 
-// Set this to false to suppress console errors in production
-const SHOW_DEBUG_ERRORS = false;
+// Enable debug logging
+const SHOW_DEBUG_ERRORS = true;
 
-// Custom logger that can be turned off in production
+// Product cache to prevent repeated fetching
+const productCache: Record<string, Product | null> = {};
+
+// Time tracking to prevent excessive requests
+const lastCartRefresh: Record<string, number> = {};
+const MIN_REFRESH_INTERVAL = 1000; // Minimum time in ms between cart refreshes for the same user
+
+// Time tracking for product fetches
+const lastProductFetch: Record<string, number> = {};
+const MIN_FETCH_INTERVAL = 500; // Minimum time in ms between fetches for the same product
+
+// Helper function for logging errors
 const logError = (message: string, error: any) => {
   if (SHOW_DEBUG_ERRORS) {
-    console.error(message, error);
+    console.error(`[CartService] ${message}`, error);
   }
 };
 
-// Demo user UUID that matches across the app
-const DEMO_USER_ID = '550e8400-e29b-41d4-a716-446655440000';
-
-// Check if a string is a valid UUID
-function isValidUUID(uuid: string): boolean {
-  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  return uuidPattern.test(uuid);
-}
-
-// Helper function to generate a valid UUID v4
-function generateUUID(): string {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-    const r = Math.random() * 16 | 0;
-    const v = c === 'x' ? r : (r & 0x3 | 0x8);
-    return v.toString(16);
-  });
-}
+// Helper function for logging debug information
+const logDebug = (message: string, data?: any) => {
+  if (SHOW_DEBUG_ERRORS) {
+    if (data) {
+      console.log(`[CartService] ${message}`, data);
+    } else {
+      console.log(`[CartService] ${message}`);
+    }
+  }
+};
 
 /**
- * Get active cart for a user
- * For demo users, this will try to use database cart but fall back to a mock cart
+ * Fetch a product by ID and cache it
  */
-export async function getActiveCart(userId: string): Promise<Cart | null> {
-  // Validation
-  if (!userId) {
-    logError('getActiveCart: No userId provided', null);
+const fetchAndCacheProduct = async (productId: string): Promise<Product | null> => {
+  // Check cache first
+  if (productCache[productId] !== undefined) {
+    logDebug(`Using cached product: ${productId}`);
+    return productCache[productId];
+  }
+  
+  // Check if we recently tried to fetch this product
+  const now = Date.now();
+  const lastFetch = lastProductFetch[productId] || 0;
+  if (now - lastFetch < MIN_FETCH_INTERVAL) {
+    logDebug(`Skipping product fetch for ${productId}, too soon since last fetch (${now - lastFetch}ms)`);
     return null;
   }
-
+  
+  // Update last fetch time
+  lastProductFetch[productId] = now;
+  
   try {
-    // Get active cart
-    const { data: cartData, error: cartError } = await supabase
+    logDebug(`Fetching product from database: ${productId}`);
+    const product = await getProductById(productId);
+    
+    // Cache the result (even if null)
+    productCache[productId] = product;
+    
+    if (product) {
+      logDebug(`Successfully cached product: ${product.name}`);
+    } else {
+      logDebug(`Product not found for ID: ${productId}`);
+    }
+    
+    return product;
+  } catch (error) {
+    logError(`Error fetching product ${productId}:`, error);
+    return null;
+  }
+};
+
+/**
+ * Get the active cart for a user, create one if it doesn't exist
+ */
+export const getActiveCart = async (userId: string): Promise<Cart | null> => {
+  try {
+    logDebug(`Getting active cart for user: ${userId}`);
+    
+    // Check if we recently fetched this cart
+    const now = Date.now();
+    const lastRefresh = lastCartRefresh[userId] || 0;
+    if (now - lastRefresh < MIN_REFRESH_INTERVAL) {
+      logDebug(`Skipping cart refresh for ${userId}, too soon since last refresh (${now - lastRefresh}ms)`);
+      return null;
+    }
+    
+    // Update last refresh time
+    lastCartRefresh[userId] = now;
+
+    // Check for an active cart first
+    const { data: carts, error } = await supabase
       .from('carts')
-      .select('*')
+      .select(`
+        id,
+        user_id,
+        created_at,
+        updated_at,
+        status,
+        completed_at,
+        payment_method,
+        items:cart_items(
+          id,
+          cart_id,
+          product_id,
+          quantity,
+          created_at,
+          updated_at,
+          product:products(*)
+        )
+      `)
       .eq('user_id', userId)
       .eq('status', 'active')
       .order('created_at', { ascending: false })
-      .limit(1)
-      .single();
+      .limit(1);
 
-    // Handle specific error cases
-    if (cartError) {
-      // For demo user, we'll create a mock cart to avoid authentication issues
-      if (userId === DEMO_USER_ID) {
-        console.log('Using client-side cart for demo user');
-        return createMockCartForDemoUser();
-      }
+    if (error) {
+      logError('Error fetching cart:', error);
+      // Try to create a new cart if error may be due to missing cart
+      return createCart(userId);
+    }
+
+    if (carts && carts.length > 0) {
+      logDebug(`Found active cart: ${carts[0].id} with ${carts[0].items.length} items`);
       
-      // For regular users with no cart, create one
-      if (cartError.code === 'PGRST116') {
-        // No active cart found, create one
-        return await createCart(userId);
-      } else {
-        // For other errors, log and rethrow
-        logError('Error fetching cart:', cartError);
-        throw new Error(cartError.message);
-      }
+      // Process the cart items to ensure they match our CartItem type
+      const processedCart = {
+        ...carts[0],
+        items: await Promise.all(carts[0].items.map(async (item: any) => {
+          // Extract product data from the response or from our cache
+          let itemProduct: Product | null = null;
+          
+          // First check if we got product data from the join
+          if (item.product && item.product.length > 0) {
+            itemProduct = item.product[0];
+            // Update cache with the joined product
+            productCache[item.product_id] = itemProduct;
+            // Use optional chaining to safely access name
+            logDebug(`Using joined product data for ${item.id}: ${itemProduct?.name || 'null'}`);
+          } 
+          // Then check our cache
+          else if (productCache[item.product_id]) {
+            itemProduct = productCache[item.product_id];
+            logDebug(`Using cached product for ${item.id}: ${itemProduct?.name || 'null'}`);
+          } 
+          // If still no product, fetch directly
+          else {
+            logDebug(`Missing product data for item ${item.id}, product_id: ${item.product_id}. Fetching directly.`);
+            itemProduct = await fetchAndCacheProduct(item.product_id);
+            
+            if (itemProduct) {
+              logDebug(`Successfully retrieved product ${itemProduct.name} for item ${item.id}`);
+            } else {
+              // Log the missing product but don't throw
+              console.warn(`Invalid product in cart item:`, item);
+            }
+          }
+          
+          // Return the processed item with product data
+          return {
+            ...item,
+            product: itemProduct || null
+          };
+        }))
+      } as Cart;
+      
+      return processedCart;
     }
 
-    if (!cartData) {
-      // No active cart found, create one
-      if (userId === DEMO_USER_ID) {
-        return createMockCartForDemoUser();
-      }
-      return await createCart(userId);
-    }
-
-    // Get cart items with product details
-    const { data: itemsData, error: itemsError } = await supabase
-      .from('cart_items')
-      .select(`
-        *,
-        product:products (*)
-      `)
-      .eq('cart_id', cartData.id);
-
-    if (itemsError) {
-      // For demo user, return mock cart on error
-      if (userId === DEMO_USER_ID) {
-        return createMockCartForDemoUser();
-      }
-      logError('Error fetching cart items:', itemsError);
-      throw new Error(itemsError.message);
-    }
-
-    // Assemble complete cart object
-    const cart: Cart = {
-      ...cartData,
-      items: itemsData || [],
-    };
-
-    return cart;
+    // No active cart found, create a new one
+    logDebug(`No active cart found for user: ${userId}, creating new cart`);
+    return createCart(userId);
   } catch (error) {
-    // For demo user, return mock cart on any error
-    if (userId === DEMO_USER_ID) {
-      return createMockCartForDemoUser();
-    }
-    logError('Error in getActiveCart:', error);
+    logError('Unexpected error in getActiveCart:', error);
     throw error;
   }
-}
-
-/**
- * Create a mock cart for demo users to use when database operations fail
- */
-function createMockCartForDemoUser(): Cart {
-  return {
-    id: generateUUID(),
-    user_id: DEMO_USER_ID,
-    status: 'active',
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-    checkout_at: null,
-    items: []
-  };
-}
+};
 
 /**
  * Create a new cart for a user
  */
-async function createCart(userId: string): Promise<Cart> {
-  if (!userId) {
-    throw new Error('No userId provided');
-  }
-
-  // Check if this is the demo user and handle accordingly
-  if (userId === DEMO_USER_ID) {
-    return createMockCartForDemoUser();
-  }
-
+export const createCart = async (userId: string): Promise<Cart | null> => {
   try {
-    // Create cart
-    const { data: cartData, error: cartError } = await supabase
-      .from('carts')
-      .insert({
-        user_id: userId,
-        status: 'active',
-      })
-      .select()
-      .single();
+    logDebug(`Creating new cart for user: ${userId}`);
 
-    if (cartError) {
-      logError('Error creating cart:', cartError);
-      
-      // If row-level security error, fall back to a client-side cart
-      if (cartError.code === '42501') {
-        console.log('Row-level security error, using client-side cart');
-        return createMockCartForDemoUser();
-      }
-      
-      throw new Error(cartError.message);
+    // Insert new cart
+    const { data: newCart, error: insertError } = await supabase
+      .from('carts')
+      .insert([
+        { 
+          user_id: userId,
+          status: 'active',
+          completed_at: null,
+        }
+      ])
+      .select();
+
+    if (insertError) {
+      logError('Error creating cart:', insertError);
+      return null;
     }
 
-    // Return new empty cart
-    return {
-      ...cartData,
-      items: [],
+    if (!newCart || newCart.length === 0) {
+      logDebug('Failed to create new cart, no data returned');
+      return null;
+    }
+
+    logDebug(`Created new cart with ID: ${newCart[0].id}`);
+
+    // Return the newly created cart with empty items array
+    const cart: Cart = {
+      ...newCart[0],
+      items: []
     };
-  } catch (error) {
-    logError('Error in createCart:', error);
     
-    // Fall back to a client-side cart for any errors
-    return createMockCartForDemoUser();
+    return cart;
+  } catch (error) {
+    logError('Unexpected error in createCart:', error);
+    throw error;
   }
-}
+};
 
 /**
- * Add a product to cart
- * For demo users, this just validates the product and returns a mock cart item
+ * Add a product to the user's active cart
  */
-export async function addToCart(
-  userId: string,
-  product: Product,
+export const addToCart = async (
+  userId: string, 
+  product: Product, 
   quantity: number = 1
-): Promise<CartItem | null> {
-  // Validation
-  if (!userId || !product || !product.id) {
-    logError('Invalid input to addToCart', { userId, product });
-    return null;
-  }
-
-  // For demo users, return a mock cart item (real cart is managed by the hook)
-  if (userId === DEMO_USER_ID) {
-    // Create a mock cart item that the hook will use
-    return createMockCartItem(product, quantity);
-  }
-
+): Promise<CartItem | null> => {
   try {
-    // Get active cart (or create one)
+    logDebug(`Adding product to cart - User ID: ${userId}, Product ID: ${product.id}, Quantity: ${quantity}`);
+
+    // Cache the product we're adding
+    productCache[product.id] = product;
+
+    // First, ensure we have an active cart
     const cart = await getActiveCart(userId);
     
     if (!cart) {
-      throw new Error('Failed to get or create cart');
+      logError('Could not get or create active cart', null);
+      return null;
     }
 
-    // Check if product already in cart
+    // Check if the product already exists in the cart
     const existingItem = cart.items.find(item => item.product_id === product.id);
 
     if (existingItem) {
-      // Update existing item quantity
-      return await updateCartItemQuantity(
-        existingItem.id,
-        existingItem.quantity + quantity
-      );
-    } else {
-      // Add new item
-      const { data: itemData, error: itemError } = await supabase
+      logDebug(`Product already in cart (Item ID: ${existingItem.id}), updating quantity`);
+      
+      // Update quantity of existing cart item
+      const newQuantity = existingItem.quantity + quantity;
+      
+      const { data: updatedItem, error: updateError } = await supabase
         .from('cart_items')
-        .insert({
-          cart_id: cart.id,
-          product_id: product.id,
-          quantity: quantity,
-        })
+        .update({ quantity: newQuantity })
+        .eq('id', existingItem.id)
         .select(`
-          *,
-          product:products (*)
+          id,
+          cart_id,
+          product_id,
+          quantity,
+          created_at,
+          updated_at,
+          product:products(*)
         `)
         .single();
 
-      if (itemError) {
-        logError('Error adding item to cart:', itemError);
-        
-        // If RLS error, fall back to client-side cart item
-        if (itemError.code === '42501') {
-          logError('Row-level security error, using client-side cart item', null);
-          return createMockCartItem(product, quantity);
-        }
-        
-        throw new Error(itemError.message);
+      if (updateError) {
+        logError('Error updating cart item:', updateError);
+        return null;
       }
 
-      return itemData;
+      logDebug(`Updated cart item - New quantity: ${newQuantity}`);
+      
+      // Process the returned item to match our CartItem type
+      if (updatedItem) {
+        let processedProduct: Product | null = null;
+        
+        // Check if product data is available from the response
+        if (updatedItem.product && updatedItem.product.length > 0) {
+          processedProduct = updatedItem.product[0];
+          // Update cache
+          productCache[updatedItem.product_id] = processedProduct;
+        } 
+        // Check cache
+        else if (productCache[updatedItem.product_id]) {
+          processedProduct = productCache[updatedItem.product_id];
+        }
+        // Try to fetch if still missing
+        else {
+          logDebug(`Missing product data in update response, fetching directly: ${updatedItem.product_id}`);
+          processedProduct = await fetchAndCacheProduct(updatedItem.product_id);
+        }
+        
+        const processedItem: CartItem = {
+          ...updatedItem,
+          product: processedProduct
+        };
+        return processedItem;
+      }
+      
+      return null;
+    } else {
+      // Add new cart item
+      logDebug(`Adding new item to cart (Cart ID: ${cart.id})`);
+      
+      const { data: newItem, error: insertError } = await supabase
+        .from('cart_items')
+        .insert([
+          {
+            cart_id: cart.id,
+            product_id: product.id,
+            quantity: quantity
+          }
+        ])
+        .select(`
+          id,
+          cart_id,
+          product_id,
+          quantity,
+          created_at,
+          updated_at,
+          product:products(*)
+        `)
+        .single();
+
+      if (insertError) {
+        logError('Error adding item to cart:', insertError);
+        
+        // If the error contains a foreign key violation, let's check for auth issues
+        if (insertError.message && insertError.message.includes('foreign key constraint')) {
+          logError('Foreign key constraint violation - possible permissions issue', null);
+        }
+        
+        return null;
+      }
+
+      logDebug(`Added new item to cart - Item ID: ${newItem?.id}`);
+      
+      // Process the returned item to match our CartItem type
+      if (newItem) {
+        let processedProduct: Product | null = null;
+        
+        // Check if product data is available from the response
+        if (newItem.product && newItem.product.length > 0) {
+          processedProduct = newItem.product[0];
+          // Update cache
+          productCache[newItem.product_id] = processedProduct;
+        } 
+        // Check cache
+        else if (productCache[newItem.product_id]) {
+          processedProduct = productCache[newItem.product_id];
+        }
+        // Try to fetch if still missing
+        else {
+          logDebug(`Missing product data in insert response, fetching directly: ${newItem.product_id}`);
+          processedProduct = await fetchAndCacheProduct(newItem.product_id);
+          
+          // If still no product, use the original product that was passed in
+          if (!processedProduct) {
+            processedProduct = product;
+            // Update cache with this product
+            productCache[product.id] = product;
+          }
+        }
+        
+        const processedItem: CartItem = {
+          ...newItem,
+          product: processedProduct
+        };
+        return processedItem;
+      }
+      
+      return null;
     }
   } catch (error) {
-    logError('Error in addToCart:', error);
-    // Fall back to client-side cart for any errors
-    return createMockCartItem(product, quantity);
+    logError('Unexpected error in addToCart:', error);
+    return null;
   }
-}
-
-/**
- * Create a mock cart item for client-side use
- */
-function createMockCartItem(product: Product, quantity: number): CartItem {
-  return {
-    id: generateUUID(),
-    cart_id: generateUUID(),
-    product_id: product.id,
-    quantity: quantity,
-    product: product,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  };
-}
+};
 
 /**
  * Remove an item from the cart
- * For demo users, this always returns true (actual removal is handled by the hook)
  */
-export async function removeCartItem(cartItemId: string): Promise<boolean> {
-  if (!cartItemId) {
-    return false;
-  }
-
-  // For demo users, return success (the actual removal is handled by the hook)
-  if (cartItemId.includes('demo') || !isValidUUID(cartItemId)) {
-    return true;
-  }
-
+export const removeCartItem = async (cartItemId: string): Promise<boolean> => {
   try {
+    logDebug(`Removing cart item: ${cartItemId}`);
+    
     const { error } = await supabase
       .from('cart_items')
       .delete()
       .eq('id', cartItemId);
 
     if (error) {
-      logError('Error removing item from cart:', error);
-      throw new Error(error.message);
+      logError('Error removing cart item:', error);
+      return false;
     }
 
+    logDebug(`Successfully removed cart item: ${cartItemId}`);
     return true;
   } catch (error) {
-    logError('Error in removeCartItem:', error);
+    logError('Unexpected error in removeCartItem:', error);
     return false;
   }
-}
+};
 
 /**
- * Update cart item quantity
- * For demo users, this returns a mock updated cart item (actual update is handled by the hook)
+ * Update the quantity of an item in the cart
  */
-export async function updateCartItemQuantity(
+export const updateCartItemQuantity = async (
   cartItemId: string,
   quantity: number
-): Promise<CartItem | null> {
-  if (!cartItemId || quantity < 0) {
-    return null;
-  }
-
-  // For demo users, return a mock updated cart item (the actual update is handled by the hook)
-  if (cartItemId.includes('demo') || !isValidUUID(cartItemId)) {
-    // Create a mock response with the new quantity
-    const dummyProduct: Product = {
-      id: 'demo-product-id',
-      name: 'Demo Product',
-      description: '',
-      price: 0,
-      image_url: '',
-      barcode: '',
-      category: '',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-
-    return {
-      id: cartItemId,
-      cart_id: 'demo-cart-id',
-      product_id: 'demo-product-id',
-      quantity: quantity,
-      product: dummyProduct,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-  }
-
+): Promise<CartItem | null> => {
   try {
-    // If quantity is 0, remove the item
-    if (quantity === 0) {
+    logDebug(`Updating cart item quantity - Item ID: ${cartItemId}, New quantity: ${quantity}`);
+    
+    // If quantity is zero or negative, remove the item instead
+    if (quantity <= 0) {
       const removed = await removeCartItem(cartItemId);
-      return removed ? null : null;
+      return removed ? { 
+        id: cartItemId, 
+        quantity: 0,
+        cart_id: '',
+        product_id: '',
+        product: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      } : null;
     }
 
-    // Update the item quantity
+    // Update the quantity
     const { data, error } = await supabase
       .from('cart_items')
       .update({ quantity })
       .eq('id', cartItemId)
       .select(`
-        *,
-        product:products (*)
+        id,
+        cart_id,
+        product_id,
+        quantity,
+        created_at,
+        updated_at,
+        product:products(*)
       `)
       .single();
 
     if (error) {
-      logError('Error updating item quantity:', error);
-      throw new Error(error.message);
+      logError('Error updating cart item quantity:', error);
+      return null;
     }
 
-    return data;
+    logDebug(`Successfully updated cart item quantity - Item ID: ${cartItemId}`);
+    
+    // Process the returned item to match our CartItem type
+    if (data) {
+      let processedProduct: Product | null = null;
+      
+      // Check if product data is available from the response
+      if (data.product && data.product.length > 0) {
+        processedProduct = data.product[0];
+        // Update cache
+        productCache[data.product_id] = processedProduct;
+      }
+      // Check cache
+      else if (productCache[data.product_id]) {
+        processedProduct = productCache[data.product_id];
+      }
+      // Try to fetch if still missing
+      else {
+        logDebug(`Missing product data after quantity update, fetching directly: ${data.product_id}`);
+        processedProduct = await fetchAndCacheProduct(data.product_id);
+      }
+      
+      const processedItem: CartItem = {
+        ...data,
+        product: processedProduct
+      };
+      return processedItem;
+    }
+    
+    return null;
   } catch (error) {
-    logError('Error in updateCartItemQuantity:', error);
+    logError('Unexpected error in updateCartItemQuantity:', error);
     return null;
   }
-}
+};
 
 /**
- * Mark a cart as completed (checkout)
- * For demo users, this always returns true (actual checkout is handled by the hook)
+ * Mark a cart as completed (checked out)
  */
-export async function checkoutCart(
+export const checkoutCart = async (
   cartId: string,
   paymentMethod: string = 'credit_card'
-): Promise<boolean> {
-  if (!cartId) {
-    return false;
-  }
-
-  // For demo users, return success (the actual checkout is handled by the hook)
-  if (cartId.includes('demo') || !isValidUUID(cartId)) {
-    return true;
-  }
-
+): Promise<boolean> => {
   try {
+    logDebug(`Checking out cart - Cart ID: ${cartId}, Payment method: ${paymentMethod}`);
+    
     const { error } = await supabase
       .from('carts')
-      .update({
+      .update({ 
         status: 'completed',
-        checkout_at: new Date().toISOString(),
         payment_method: paymentMethod,
+        completed_at: new Date().toISOString()
       })
       .eq('id', cartId);
 
     if (error) {
       logError('Error checking out cart:', error);
-      throw new Error(error.message);
+      return false;
     }
 
+    logDebug(`Successfully checked out cart: ${cartId}`);
     return true;
   } catch (error) {
-    logError('Error in checkoutCart:', error);
+    logError('Unexpected error in checkoutCart:', error);
     return false;
   }
-}
+};
 
-// Get order history for a user
-export const getOrderHistory = async (userId: string): Promise<Cart[]> => {
-  const { data, error } = await supabase
-    .from('carts')
-    .select('*')
-    .eq('user_id', userId)
-    .eq('status', 'completed')
-    .order('checkout_at', { ascending: false });
-  
-  if (error) {
-    logError('Error fetching order history:', error);
+/**
+ * Get details of a specific cart
+ */
+export const getCartDetails = async (cartId: string): Promise<Cart | null> => {
+  try {
+    logDebug(`Getting cart details - Cart ID: ${cartId}`);
+    
+    const { data, error } = await supabase
+      .from('carts')
+      .select(`
+        id,
+        user_id,
+        created_at,
+        updated_at,
+        status,
+        completed_at,
+        payment_method,
+        items:cart_items(
+          id,
+          cart_id,
+          product_id,
+          quantity,
+          created_at,
+          updated_at,
+          product:products(*)
+        )
+      `)
+      .eq('id', cartId)
+      .single();
+
+    if (error) {
+      logError('Error fetching cart details:', error);
+      return null;
+    }
+
+    logDebug(`Successfully retrieved cart details - Cart ID: ${cartId}`);
+    
+    // Process the cart items to ensure they match our CartItem type
+    if (data) {
+      const processedCart: Cart = {
+        ...data,
+        items: await Promise.all(data.items.map(async (item: any) => {
+          // Extract product data from the response or from our cache
+          let itemProduct: Product | null = null;
+          
+          // First check if we got product data from the join
+          if (item.product && item.product.length > 0) {
+            itemProduct = item.product[0];
+            // Update cache with the joined product
+            productCache[item.product_id] = itemProduct;
+          } 
+          // Then check our cache
+          else if (productCache[item.product_id]) {
+            itemProduct = productCache[item.product_id];
+          } 
+          // If still no product, fetch directly
+          else {
+            logDebug(`Missing product data for item ${item.id}, product_id: ${item.product_id}. Fetching directly.`);
+            itemProduct = await fetchAndCacheProduct(item.product_id);
+            
+            if (itemProduct) {
+              logDebug(`Successfully retrieved product ${itemProduct.name} for item ${item.id}`);
+            } else {
+              // Log the missing product but don't throw
+              console.warn(`Invalid product in cart item:`, item);
+            }
+          }
+          
+          // Return the processed item with product data
+          return {
+            ...item,
+            product: itemProduct || null
+          };
+        }))
+      };
+      
+      return processedCart;
+    }
+    
+    return null;
+  } catch (error) {
+    logError('Unexpected error in getCartDetails:', error);
+    return null;
+  }
+};
+
+/**
+ * Get cart history for a user
+ */
+export const getCartHistory = async (userId: string): Promise<Cart[]> => {
+  try {
+    logDebug(`Getting cart history for user: ${userId}`);
+    
+    const { data, error } = await supabase
+      .from('carts')
+      .select(`
+        id,
+        user_id,
+        created_at,
+        updated_at,
+        status,
+        completed_at,
+        payment_method,
+        items:cart_items(
+          id,
+          cart_id,
+          product_id,
+          quantity,
+          created_at,
+          updated_at,
+          product:products(*)
+        )
+      `)
+      .eq('user_id', userId)
+      .eq('status', 'completed')
+      .order('completed_at', { ascending: false });
+
+    if (error) {
+      logError('Error fetching cart history:', error);
+      return [];
+    }
+
+    logDebug(`Retrieved ${data.length} completed carts for user: ${userId}`);
+    
+    // Process the cart items to ensure they match our CartItem type
+    if (data) {
+      const processedCarts: Cart[] = await Promise.all(data.map(async (cart: any) => ({
+        ...cart,
+        items: await Promise.all(cart.items.map(async (item: any) => {
+          // Extract product data from the response or from our cache
+          let itemProduct: Product | null = null;
+          
+          // First check if we got product data from the join
+          if (item.product && item.product.length > 0) {
+            itemProduct = item.product[0];
+            // Update cache with the joined product
+            productCache[item.product_id] = itemProduct;
+          } 
+          // Then check our cache
+          else if (productCache[item.product_id]) {
+            itemProduct = productCache[item.product_id];
+          } 
+          // If still no product, fetch directly
+          else {
+            logDebug(`Missing product data for item ${item.id}, product_id: ${item.product_id}. Fetching directly.`);
+            itemProduct = await fetchAndCacheProduct(item.product_id);
+            
+            if (itemProduct) {
+              logDebug(`Successfully retrieved product ${itemProduct.name} for item ${item.id}`);
+            } else {
+              // Log the missing product but don't throw
+              console.warn(`Invalid product in cart item:`, item);
+            }
+          }
+          
+          // Return the processed item with product data
+          return {
+            ...item,
+            product: itemProduct || null
+          };
+        }))
+      })));
+      
+      return processedCarts;
+    }
+    
+    return [];
+  } catch (error) {
+    logError('Unexpected error in getCartHistory:', error);
     return [];
   }
-  
-  // Get items for each cart
-  const carts: Cart[] = [];
-  
-  for (const cart of data) {
-    const { data: itemsData, error: itemsError } = await supabase
-      .from('cart_items_with_products')
-      .select('*')
-      .eq('cart_id', cart.id);
-    
-    if (itemsError) {
-      logError(`Error fetching items for cart ${cart.id}:`, itemsError);
-      carts.push({ ...cart, items: [] } as Cart);
-    } else {
-      carts.push({ ...cart, items: itemsData } as Cart);
+};
+
+/**
+ * Preload a product into the cache to ensure it's available
+ * This can be called ahead of time to ensure products display properly
+ */
+export const preloadProduct = async (productId: string): Promise<Product | null> => {
+  try {
+    if (productCache[productId]) {
+      logDebug(`Product ${productId} already in cache`);
+      return productCache[productId];
     }
+    
+    logDebug(`Preloading product: ${productId}`);
+    return await fetchAndCacheProduct(productId);
+  } catch (error) {
+    logError(`Error preloading product ${productId}:`, error);
+    return null;
   }
-  
-  return carts;
 }; 

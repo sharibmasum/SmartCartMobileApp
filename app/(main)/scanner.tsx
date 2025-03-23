@@ -10,6 +10,7 @@ import {
   Alert,
   Modal,
   Animated,
+  ActivityIndicator,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { router } from 'expo-router';
@@ -20,6 +21,7 @@ import { supabase } from '../../services/supabase';
 import { logout } from '../../services/auth';
 import Button from '../../components/ui/Button';
 import { Theme } from '../../theme';
+import { getCurrentUser } from '../../services/auth';
 
 // Define interfaces for our state
 interface ScannedItem {
@@ -29,32 +31,33 @@ interface ScannedItem {
   confidence?: number;
 }
 
-// Use a properly formatted UUID for the demo user ID
-const DEMO_USER_ID = '550e8400-e29b-41d4-a716-446655440000';
+// Enable debug logging
+const SHOW_DEBUG_ERRORS = true;
 
-// Set this to false to suppress console errors in production
-const SHOW_DEBUG_ERRORS = false;
-
-// Replace console.error with this custom error handler
+// Custom logger that can be turned on/off
 const logError = (message: string, error: any) => {
   if (SHOW_DEBUG_ERRORS) {
-    console.error(message, error);
+    console.error(`[Scanner] ${message}`, error);
   }
 };
 
-// Helper function to generate a valid UUID v4
-function generateUUID() {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-    const r = Math.random() * 16 | 0;
-    const v = c === 'x' ? r : (r & 0x3 | 0x8);
-    return v.toString(16);
-  });
-}
+// Helper function for logging debug information
+const logDebug = (message: string, data?: any) => {
+  if (SHOW_DEBUG_ERRORS) {
+    if (data) {
+      console.log(`[Scanner] ${message}`, data);
+    } else {
+      console.log(`[Scanner] ${message}`);
+    }
+  }
+};
 
 // Helper function to get product from database by name
 async function getProductByName(name: string) {
   // Normalize the name for better matching
   const normalizedName = name.toLowerCase().trim();
+  
+  logDebug(`Searching for product with name: ${normalizedName}`);
   
   // First try exact match
   const { data: exactMatch, error: exactError } = await supabase
@@ -62,8 +65,13 @@ async function getProductByName(name: string) {
     .select('*')
     .ilike('name', normalizedName)
     .limit(1);
+  
+  if (exactError) {
+    logError('Error during exact match search:', exactError);
+  }
     
   if (!exactError && exactMatch && exactMatch.length > 0) {
+    logDebug(`Found exact match: ${exactMatch[0].name}`);
     return exactMatch[0];
   }
   
@@ -74,7 +82,12 @@ async function getProductByName(name: string) {
     .ilike('name', `%${normalizedName}%`)
     .limit(1);
   
+  if (partialError) {
+    logError('Error during partial match search:', partialError);
+  }
+  
   if (!partialError && partialMatch && partialMatch.length > 0) {
+    logDebug(`Found partial match: ${partialMatch[0].name}`);
     return partialMatch[0];
   }
   
@@ -84,12 +97,18 @@ async function getProductByName(name: string) {
     .select('*')
     .eq('category', 'Fruits')
     .limit(1);
+  
+  if (fruitError) {
+    logError('Error during fruit category search:', fruitError);
+  }
     
   if (!fruitError && fruitMatch && fruitMatch.length > 0) {
     // Return first fruit as fallback
+    logDebug(`No match found, returning first fruit as fallback: ${fruitMatch[0].name}`);
     return fruitMatch[0];
   }
   
+  logDebug('No product found matching the name');
   return null;
 }
 
@@ -100,7 +119,8 @@ export default function Scanner() {
   const [flash, setFlash] = useState(false);
   const [facing, setFacing] = useState<'back' | 'front'>('back');
   const cameraRef = useRef<any>(null);
-  const [userId, setUserId] = useState<string>(DEMO_USER_ID); // Initialize with demo UUID
+  const [userId, setUserId] = useState<string | null>(null);
+  const [userLoading, setUserLoading] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [showDetectedItem, setShowDetectedItem] = useState(false);
   const [detectedProduct, setDetectedProduct] = useState<any>(null);
@@ -113,32 +133,57 @@ export default function Scanner() {
   // Get the current user ID
   useEffect(() => {
     const getUserId = async () => {
+      setUserLoading(true);
       try {
-        const { data, error } = await supabase.auth.getSession();
-        if (error) {
-          console.error('Error getting user session:', error);
-          return;
-        }
+        logDebug('Attempting to get current user');
+        const user = await getCurrentUser();
         
-        if (data?.session?.user) {
-          setUserId(data.session.user.id);
+        if (user && user.id) {
+          logDebug(`User authenticated: ${user.id}`);
+          setUserId(user.id);
         } else {
-          // For development, use a demo UUID
-          console.log('No authenticated user, using demo UUID');
-          setUserId(DEMO_USER_ID);
+          logDebug('No authenticated user, redirecting to login');
+          // If no user is authenticated, redirect to login
+          Alert.alert(
+            "Authentication Required", 
+            "You need to be logged in to use the scanner.",
+            [{ text: "OK", onPress: () => router.replace('/(auth)/login') }]
+          );
         }
       } catch (err) {
-        console.error('Error in getUserId:', err);
-        // Fall back to demo UUID
-        setUserId(DEMO_USER_ID);
+        logError('Error getting current user:', err);
+        // Show error message and redirect to login
+        Alert.alert(
+          "Authentication Error", 
+          "There was a problem verifying your login. Please try again.",
+          [{ text: "OK", onPress: () => router.replace('/(auth)/login') }]
+        );
+      } finally {
+        setUserLoading(false);
       }
     };
     
     getUserId();
   }, []);
   
-  // Get cart functionality from our hook
-  const { addProductToCart, loading: cartLoading } = useCart(userId);
+  // Get cart functionality from our hook - only initialize when we have a userId
+  const { 
+    addProductToCart, 
+    loading: cartLoading,
+    error: cartError 
+  } = useCart(userId || '');
+
+  // Handle cart errors
+  useEffect(() => {
+    if (cartError) {
+      logError('Cart error:', cartError);
+      Alert.alert(
+        "Cart Error",
+        "There was a problem with your cart. Please try again later.",
+        [{ text: "OK" }]
+      );
+    }
+  }, [cartError]);
 
   useEffect(() => {
     (async () => {
@@ -197,20 +242,32 @@ export default function Scanner() {
     if (!cameraRef.current) return null;
     
     try {
+      logDebug('Taking picture with camera');
       const photo = await cameraRef.current.takePictureAsync({
         quality: 0.8,
         base64: true,
       });
       return photo;
     } catch (error) {
-      console.error('Error taking picture:', error);
+      logError('Error taking picture:', error);
       return null;
     }
   };
 
   const handleScan = useCallback(async () => {
-    if (scanning || cartLoading) return; // Prevent multiple scans
+    if (scanning || cartLoading || !userId) {
+      if (!userId) {
+        logDebug('Cannot scan: No authenticated user');
+        Alert.alert("Login Required", "Please login to scan products.");
+      } else if (scanning) {
+        logDebug('Already scanning, ignoring request');
+      } else if (cartLoading) {
+        logDebug('Cart operation in progress, ignoring scan request');
+      }
+      return;
+    }
     
+    logDebug('Starting product scan');
     setScanning(true);
     
     try {
@@ -221,10 +278,13 @@ export default function Scanner() {
         throw new Error('Failed to capture image');
       }
       
+      logDebug('Image captured, sending to Vision API');
+      
       // Send the image to Google Vision API for food recognition
       const recognitionResult = await recognizeFoodWithVision(photo.base64);
       
       if (!recognitionResult || !recognitionResult.items || recognitionResult.items.length === 0) {
+        logDebug('No items recognized in image');
         // Display in UI instead of alert
         setScannedItem({
           name: "No item recognized",
@@ -236,9 +296,11 @@ export default function Scanner() {
       
       // Get the highest confidence food item
       const bestMatch = recognitionResult.items[0];
+      logDebug(`Best match from Vision API: ${bestMatch.name}`);
       
       // Use the productId to get the complete product information
       if (!bestMatch.productId) {
+        logDebug('Best match has no product ID');
         // Display in UI instead of alert
         setScannedItem({
           name: "Item not in database",
@@ -255,131 +317,166 @@ export default function Scanner() {
           .select('*')
           .eq('id', bestMatch.productId)
           .single();
-        
+          
         if (error || !databaseProduct) {
           logError('Error fetching product from database:', error);
-          // Display in UI instead of alert
+          
+          // Try to get by name as fallback
+          logDebug(`Trying to find product by name: ${bestMatch.name}`);
+          const productByName = await getProductByName(bestMatch.name);
+          
+          if (productByName) {
+            setDetectedProduct(productByName);
+            setScannedItem({
+              name: productByName.name,
+              price: productByName.price,
+              detected: true,
+              confidence: bestMatch.confidence,
+            });
+            setShowDetectedItem(true);
+          } else {
+            setScannedItem({
+              name: bestMatch.name,
+              detected: false,
+              confidence: bestMatch.confidence,
+            });
+          }
+        } else {
+          // We found the product!
+          logDebug(`Product found in database: ${databaseProduct.name}`);
+          setDetectedProduct(databaseProduct);
           setScannedItem({
-            name: "Item not in database",
-            detected: false, // This will hide the checkmark
+            name: databaseProduct.name,
+            price: databaseProduct.price,
+            detected: true,
+            confidence: bestMatch.confidence,
           });
-          setScanning(false);
-          return;
+          setShowDetectedItem(true);
         }
-        
-        // Set the scanned item state with success
+      } catch (dbError) {
+        logError('Error in database query:', dbError);
+        // Display error message
         setScannedItem({
           name: bestMatch.name,
-          detected: true,
-          price: bestMatch.price || 2.99, // Default price if not available
-          confidence: bestMatch.confidence, // Keep for internal use but don't show to user
+          detected: false,
+          confidence: bestMatch.confidence,
         });
-        
-        // Show product in slide-up panel
-        setDetectedProduct(databaseProduct);
-        setShowDetectedItem(true);
-        setScanning(false);
-      } catch (dbError) {
-        logError('Database error:', dbError);
-        // Display in UI instead of alert
-        setScannedItem({
-          name: "Item not in database",
-          detected: false, // This will hide the checkmark
-        });
-        setScanning(false);
       }
-    } catch (error) {
-      logError('Vision API error:', error);
-      // Display in UI instead of alert
-      setScannedItem({
-        name: "Scan failed",
-        detected: false,
-      });
+    } catch (e) {
+      logError('Error scanning item:', e);
+      Alert.alert('Error', 'Failed to scan item. Please try again.');
+    } finally {
       setScanning(false);
     }
-  }, [scanning, cartLoading, takePicture, addProductToCart]);
-
-  const handleCancelAddToCart = useCallback(() => {
-    // First start the animation to slide down
-    Animated.timing(slideUpAnim, {
-      toValue: 0,
-      duration: 300,
-      useNativeDriver: true,
-    }).start(({ finished }) => {
-      // Only hide the panel after animation completes
-      if (finished) {
-        setShowDetectedItem(false);
-        setDetectedProduct(null);
-      }
-    });
-  }, [slideUpAnim]);
+  }, [scanning, cartLoading, userId]);
 
   const handleAddToCart = useCallback(async () => {
-    if (!detectedProduct) return;
+    if (!detectedProduct || !userId) {
+      if (!userId) {
+        logDebug('Cannot add to cart: No authenticated user');
+        Alert.alert("Login Required", "Please login to add items to your cart.");
+      } else {
+        logDebug('Cannot add to cart: No detected product');
+      }
+      return;
+    }
     
     try {
-      // Add product to cart
+      logDebug(`Adding product to cart: ${detectedProduct.name}`);
       const result = await addProductToCart(detectedProduct, 1);
       
-      // Animate panel sliding down
-      Animated.timing(slideUpAnim, {
-        toValue: 0,
-        duration: 300,
-        useNativeDriver: true,
-      }).start(({ finished }) => {
-        // Only hide the panel after animation completes
-        if (finished) {
-          setShowDetectedItem(false);
-          setDetectedProduct(null);
-          
-          // Show success popup instead of Alert
-          setShowSuccessPopup(true);
-        }
-      });
+      if (result) {
+        logDebug(`Successfully added ${detectedProduct.name} to cart`);
+        // Hide the panel
+        setShowDetectedItem(false);
+        // Show success popup
+        setShowSuccessPopup(true);
+      } else {
+        logError('Failed to add product to cart', null);
+        Alert.alert(
+          'Error', 
+          'Could not add item to cart. Please try again.'
+        );
+      }
     } catch (error) {
       logError('Error adding to cart:', error);
-      Alert.alert("Error", "Failed to add item to cart. Please try again.");
+      Alert.alert(
+        'Error', 
+        'Failed to add item to cart. Please try again.'
+      );
     }
-  }, [detectedProduct, addProductToCart, slideUpAnim]);
+  }, [detectedProduct, addProductToCart, userId]);
 
   const toggleFlash = () => {
-    setFlash(!flash);
+    setFlash(prev => !prev);
   };
 
   const toggleCamera = () => {
-    setFacing(facing === 'back' ? 'front' : 'back');
+    setFacing(prev => prev === 'back' ? 'front' : 'back');
   };
 
   const goToCart = () => {
-    // Force a unique refresh value each time to guarantee a refresh
-    router.push({
-      pathname: '/(main)/cart',
-      params: { refresh: Date.now().toString() }
-    });
+    if (!userId) {
+      Alert.alert("Login Required", "Please login to view your cart.");
+      return;
+    }
+    router.push('/(main)/cart');
   };
 
-  // Handle logout
+  const handleCloseDetectedItem = () => {
+    setShowDetectedItem(false);
+    setDetectedProduct(null);
+  };
+
   const handleLogout = async () => {
     try {
       await logout();
       router.replace('/(auth)/login');
     } catch (error) {
       console.error('Logout error:', error);
-      Alert.alert('Error', 'Failed to log out. Please try again.');
+      Alert.alert('Error', 'Failed to logout. Please try again.');
     }
   };
 
-  // Handle settings button press
   const handleSettings = () => {
-    setShowSettings(true);
+    setShowSettings(!showSettings);
   };
 
-  if (permission === undefined) {
-    return <View style={styles.container}><Text>Requesting camera permission...</Text></View>;
+  // Loading state while checking for user authentication
+  if (userLoading) {
+    return (
+      <SafeAreaView style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color={Theme.colors.primary} />
+        <Text style={styles.loadingText}>Checking authentication...</Text>
+      </SafeAreaView>
+    );
   }
-  
-  if (permission && !permission.granted) {
-    return <View style={styles.container}><Text>No access to camera</Text></View>;
+
+  // If no user is authenticated
+  if (!userId) {
+    return (
+      <SafeAreaView style={styles.loadingContainer}>
+        <Text style={styles.errorText}>Authentication Required</Text>
+        <Button 
+          title="Go to Login" 
+          onPress={() => router.replace('/(auth)/login')}
+          style={styles.loginButton} 
+        />
+      </SafeAreaView>
+    );
+  }
+
+  if (!permission?.granted) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.text}>We need your permission to use the camera</Text>
+        <Button 
+          title="Grant Permission" 
+          onPress={requestPermission} 
+          style={{ marginTop: 20 }}
+        />
+      </View>
+    );
   }
 
   // Calculate transform for slide-up animation
@@ -546,7 +643,7 @@ export default function Scanner() {
             <View style={styles.detectedItemPanelButtons}>
               <TouchableOpacity 
                 style={styles.cancelButton}
-                onPress={handleCancelAddToCart}
+                onPress={handleCloseDetectedItem}
               >
                 <Text style={styles.cancelButtonText}>Cancel</Text>
               </TouchableOpacity>
@@ -569,6 +666,10 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: 'white',
+  },
+  centeredContainer: {
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   mainContent: {
     flex: 1,
@@ -858,5 +959,29 @@ const styles = StyleSheet.create({
   notFoundText: {
     color: '#D32F2F', // Red color for error state
     fontSize: 18,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    marginTop: 20,
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  errorText: {
+    color: '#D32F2F',
+    fontSize: 18,
+    marginBottom: 20,
+  },
+  loginButton: {
+    backgroundColor: '#b3a7e3',
+    padding: 16,
+    borderRadius: 25,
+  },
+  text: {
+    fontSize: 18,
+    marginBottom: 20,
   },
 });

@@ -1,9 +1,23 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, Image, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
+import React, { useState, useEffect, useCallback, memo } from 'react';
+import { View, Text, Image, StyleSheet, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import { CartItem as CartItemType } from '../../types/cart.types';
-import { Theme } from '../../theme';
 import { Feather } from '@expo/vector-icons';
-import ImageDownloader from '../../utils/image-downloader';
+import { getProductById } from '../../services/products'; // Import the products service
+import { preloadProduct } from '../../services/cart';  // Import the preload function
+
+// Enable debug logging
+const SHOW_DEBUG_LOGS = true;
+
+// Helper function for logging debug information
+const logDebug = (message: string, data?: any) => {
+  if (SHOW_DEBUG_LOGS) {
+    if (data) {
+      console.log(`[CartItem] ${message}`, data);
+    } else {
+      console.log(`[CartItem] ${message}`);
+    }
+  }
+};
 
 interface CartItemProps {
   item: CartItemType;
@@ -11,78 +25,124 @@ interface CartItemProps {
   onRemove: (itemId: string) => void;
 }
 
-const CartItem: React.FC<CartItemProps> = ({ item, onUpdateQuantity, onRemove }) => {
+const CartItem: React.FC<CartItemProps> = memo(({ item, onUpdateQuantity, onRemove }) => {
   const { product, quantity } = item;
   const [imageLoading, setImageLoading] = useState(true);
   const [imageError, setImageError] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [localQuantity, setLocalQuantity] = useState(quantity);
   const [localImageUri, setLocalImageUri] = useState<string | null>(null);
+  const [isLoadingProduct, setIsLoadingProduct] = useState(false);
+  const [localProduct, setLocalProduct] = useState(product);
+  const [loadAttempted, setLoadAttempted] = useState(false);
   
   // Update local quantity whenever the prop changes
   useEffect(() => {
     if (localQuantity !== quantity) {
-      console.log(`CartItem ${item.id} quantity updated: ${localQuantity} → ${quantity}`);
+      logDebug(`Quantity updated: ${localQuantity} → ${quantity} for item ${item.id}`);
       setLocalQuantity(quantity);
     }
   }, [quantity, item.id, localQuantity]);
 
-  // Download and cache the product image
+  // Update local product when product prop changes
   useEffect(() => {
-    let isMounted = true;
-    
-    const downloadImage = async () => {
-      if (product?.image_url) {
-        try {
-          setImageLoading(true);
-          const uri = await ImageDownloader.getImageUri(product.image_url);
-          if (isMounted) {
-            setLocalImageUri(uri);
-            setImageError(false);
-          }
-        } catch (error) {
-          if (isMounted) {
-            console.error('Error loading product image:', error);
-            setImageError(true);
-          }
-        } finally {
-          if (isMounted) {
-            setImageLoading(false);
-          }
-        }
+    if (product && (!localProduct || product.id !== localProduct.id)) {
+      setLocalProduct(product);
+    }
+  }, [product, localProduct]);
+
+  // DEBUG: Log item data when rendered
+  useEffect(() => {
+    if (!loadAttempted) {
+      logDebug(`Rendered with ID: ${item.id}, product_id: ${item.product_id}, quantity: ${quantity}`);
+      if (product) {
+        logDebug(`Product details: ${product.name}, $${product.price}`);
       } else {
-        if (isMounted) {
-          setImageError(true);
-          setImageLoading(false);
-        }
+        logDebug(`No product found for item ${item.id}`);
       }
-    };
-    
-    downloadImage();
-    
-    return () => {
-      isMounted = false;
-    };
-  }, [product?.image_url]);
+    }
+  }, [item.id, item.product_id, product, quantity, loadAttempted]);
 
-  // DEBUG: Log all prop changes to this item
+  // Attempt to load missing product data
+  const fetchProductData = useCallback(async () => {
+    if (isLoadingProduct || localProduct) return;
+    
+    setIsLoadingProduct(true);
+    setLoadAttempted(true);
+    logDebug(`Attempting to fetch product data for item ${item.id}, product_id: ${item.product_id}`);
+    
+    try {
+      // Use the preloadProduct function for better caching
+      const productData = await preloadProduct(item.product_id);
+      
+      if (productData) {
+        logDebug(`Successfully loaded product data: ${productData.name}`);
+        setLocalProduct(productData);
+      } else {
+        logDebug(`Could not find product with ID: ${item.product_id}`);
+      }
+    } catch (error) {
+      console.error('Error fetching product:', error);
+    } finally {
+      setIsLoadingProduct(false);
+    }
+  }, [isLoadingProduct, localProduct, item.id, item.product_id]);
+
+  // Try to fetch product data if missing - only once
   useEffect(() => {
-    console.log(`CartItem ${item.id} rendered with quantity: ${quantity} (product: ${product?.name})`);
-  }, [item.id, quantity, product]);
+    if (!product && !isLoadingProduct && !localProduct && !loadAttempted) {
+      fetchProductData();
+    }
+  }, [product, fetchProductData, isLoadingProduct, localProduct, loadAttempted]);
 
-  if (!product) {
-    return null;
+  // Handle missing product data
+  if (!localProduct) {
+    return (
+      <View style={[styles.container, styles.missingProductContainer]}>
+        <View style={styles.contentContainer}>
+          <View style={[styles.image, styles.placeholderImage]}>
+            <Feather name="alert-circle" size={24} color="#ff6b6b" />
+          </View>
+          <View style={styles.infoContainer}>
+            <Text style={styles.errorText}>Product Information Missing</Text>
+            <Text style={styles.productPrice}>ID: {item.product_id}</Text>
+            <Text style={styles.productPrice}>Quantity: {quantity}</Text>
+            {isLoadingProduct ? (
+              <View style={styles.retryButtonContainer}>
+                <ActivityIndicator size="small" color="#474472" />
+                <Text style={styles.loadingText}>Loading...</Text>
+              </View>
+            ) : (
+              <TouchableOpacity 
+                style={styles.retryButtonContainer} 
+                onPress={fetchProductData}
+              >
+                <Feather name="refresh-cw" size={14} color="#474472" />
+                <Text style={styles.retryText}>Try Again</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+        <TouchableOpacity 
+          style={styles.removeButton}
+          onPress={() => onRemove(item.id)}
+        >
+          <Feather name="trash-2" size={18} color="#ff6b6b" />
+        </TouchableOpacity>
+      </View>
+    );
   }
 
-  // Always use localQuantity for display and calculations
-  const itemTotal = product.price * localQuantity;
+  // Calculate item total price using local product if available
+  const itemTotal = localProduct.price * localQuantity;
   
-  const incrementQuantity = async () => {
+  const incrementQuantity = useCallback(async () => {
     const newQuantity = localQuantity + 1;
     setIsUpdating(true);
     // Optimistically update local state first
     setLocalQuantity(newQuantity);
     try {
+      logDebug(`Incrementing quantity to ${newQuantity} for item ${item.id}`);
       await onUpdateQuantity(item.id, newQuantity);
     } catch (error) {
       // If there's an error, revert to the original quantity
@@ -91,15 +151,16 @@ const CartItem: React.FC<CartItemProps> = ({ item, onUpdateQuantity, onRemove })
     } finally {
       setIsUpdating(false);
     }
-  };
+  }, [localQuantity, item.id, onUpdateQuantity, quantity]);
   
-  const decrementQuantity = async () => {
+  const decrementQuantity = useCallback(async () => {
     if (localQuantity > 1) {
       const newQuantity = localQuantity - 1;
       setIsUpdating(true);
       // Optimistically update local state first
       setLocalQuantity(newQuantity);
       try {
+        logDebug(`Decrementing quantity to ${newQuantity} for item ${item.id}`);
         await onUpdateQuantity(item.id, newQuantity);
       } catch (error) {
         // If there's an error, revert to the original quantity
@@ -109,24 +170,30 @@ const CartItem: React.FC<CartItemProps> = ({ item, onUpdateQuantity, onRemove })
         setIsUpdating(false);
       }
     } else {
+      logDebug(`Removing item ${item.id} (quantity would be less than 1)`);
       onRemove(item.id);
     }
-  };
+  }, [localQuantity, item.id, onUpdateQuantity, quantity, onRemove]);
 
   // Function to handle image errors
-  const handleImageError = () => {
+  const handleImageError = useCallback(() => {
+    logDebug(`Image error for item ${item.id}`);
     setImageLoading(false);
     setImageError(true);
-  };
+  }, [item.id]);
+  
+  const handleRemove = useCallback(() => {
+    onRemove(item.id);
+  }, [onRemove, item.id]);
   
   return (
     <View style={styles.container}>
       <View style={styles.contentContainer}>
         <View style={styles.imageContainer}>
-          {!imageError && (localImageUri || product.image_url) ? (
+          {!imageError && (localImageUri || localProduct.image_url) ? (
             <>
               <Image 
-                source={{ uri: localImageUri || product.image_url }}
+                source={{ uri: localImageUri || localProduct.image_url }}
                 style={styles.image}
                 onLoadStart={() => setImageLoading(true)}
                 onLoadEnd={() => setImageLoading(false)}
@@ -146,13 +213,14 @@ const CartItem: React.FC<CartItemProps> = ({ item, onUpdateQuantity, onRemove })
         </View>
         
         <View style={styles.infoContainer}>
-          <Text style={styles.productName} numberOfLines={1}>{product.name}</Text>
-          
-          <Text style={styles.productPrice}>${product.price.toFixed(2)} / each</Text>
+          <Text style={styles.productName} numberOfLines={1} ellipsizeMode="tail">
+            {localProduct.name}
+          </Text>
+          <Text style={styles.productPrice}>${localProduct.price.toFixed(2)}</Text>
           
           <View style={styles.quantityContainer}>
             <TouchableOpacity 
-              style={[styles.quantityButton, isUpdating && styles.disabledButton]} 
+              style={[styles.quantityButton, isUpdating && styles.disabledButton]}
               onPress={decrementQuantity}
               disabled={isUpdating}
             >
@@ -160,13 +228,13 @@ const CartItem: React.FC<CartItemProps> = ({ item, onUpdateQuantity, onRemove })
             </TouchableOpacity>
             
             {isUpdating ? (
-              <ActivityIndicator size="small" color="#b9b1f0" style={styles.quantityLoader} />
+              <ActivityIndicator size="small" color="#474472" style={styles.quantityLoader} />
             ) : (
               <Text style={styles.quantity}>{localQuantity}</Text>
             )}
             
             <TouchableOpacity 
-              style={[styles.quantityButton, isUpdating && styles.disabledButton]} 
+              style={[styles.quantityButton, isUpdating && styles.disabledButton]}
               onPress={incrementQuantity}
               disabled={isUpdating}
             >
@@ -179,17 +247,16 @@ const CartItem: React.FC<CartItemProps> = ({ item, onUpdateQuantity, onRemove })
       <View style={styles.rightContainer}>
         <TouchableOpacity 
           style={styles.removeButton}
-          onPress={() => onRemove(item.id)}
-          disabled={isUpdating}
+          onPress={handleRemove}
         >
-          <Feather name="trash-2" size={18} color={isUpdating ? "#ccc" : "#ff6b6b"} />
+          <Feather name="trash-2" size={18} color="#ff6b6b" />
         </TouchableOpacity>
         
         <Text style={styles.totalPrice}>${itemTotal.toFixed(2)}</Text>
       </View>
     </View>
   );
-};
+});
 
 const styles = StyleSheet.create({
   container: {
@@ -205,6 +272,11 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 2,
+  },
+  missingProductContainer: {
+    backgroundColor: '#fff5f5',
+    borderWidth: 1,
+    borderColor: '#ffdddd',
   },
   contentContainer: {
     flex: 1,
@@ -289,6 +361,28 @@ const styles = StyleSheet.create({
   quantityLoader: {
     marginHorizontal: 12,
     minWidth: 20,
+  },
+  errorText: {
+    color: '#ff6b6b',
+    fontSize: 14,
+    fontWeight: '500',
+    marginBottom: 4,
+  },
+  retryButtonContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+    padding: 4,
+  },
+  retryText: {
+    marginLeft: 4,
+    fontSize: 12,
+    color: '#474472',
+  },
+  loadingText: {
+    marginLeft: 4,
+    fontSize: 12,
+    color: '#474472',
   },
 });
 

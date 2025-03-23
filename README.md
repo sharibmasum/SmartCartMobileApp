@@ -48,3 +48,35 @@ Join our community of developers creating universal apps.
 
 - [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
 - [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+
+## Database Migration
+
+To apply the Row-Level Security policies and ensure each user's cart is properly secured, you need to run the migration script:
+
+1. Make sure you have the Supabase CLI installed:
+```
+npm install -g supabase
+```
+
+2. Login to your Supabase account:
+```
+supabase login
+```
+
+3. Link your project (if not already linked):
+```
+supabase link --project-ref <your-project-ref>
+```
+
+4. Push the migration to your Supabase project:
+```
+supabase db push
+```
+
+The migration will:
+- Enable Row-Level Security on the carts and cart_items tables
+- Create policies to ensure users can only access their own carts and cart items
+- Create a view and helper functions to make cart operations easier
+- Ensure the products table is readable by all authenticated users
+
+After applying this migration, each user will only be able to see and modify their own carts.

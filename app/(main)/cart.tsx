@@ -1,6 +1,6 @@
-import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { View, StyleSheet, Text, Image, ScrollView, ActivityIndicator, TouchableOpacity, Alert } from 'react-native';
-import { supabase } from '../../lib/supabase';
+import { supabase } from '../../services/supabase';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useCart } from '../../hooks/useCart';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -9,22 +9,57 @@ import { Theme } from '../../theme';
 import CartItem from '../../components/cart/CartItem';
 import Button from '../../components/ui/Button';
 import { MaterialIcons } from '@expo/vector-icons';
+import { getCurrentUser } from '../../services/auth';
+import { preloadProduct } from '../../services/cart';
 
-// Default demo user ID used across the app
-const DEMO_USER_ID = '550e8400-e29b-41d4-a716-446655440000';
+// Enable debug logging
+const SHOW_DEBUG_LOGS = true;
+
+// Helper function for logging debug information
+const logDebug = (message: string, data?: any) => {
+  if (SHOW_DEBUG_LOGS) {
+    if (data) {
+      console.log(`[CartPage] ${message}`, data);
+    } else {
+      console.log(`[CartPage] ${message}`);
+    }
+  }
+};
 
 const CartPage = () => {
-  const [userId, setUserId] = useState<string>(DEMO_USER_ID);
-  const isDemoUser = userId === DEMO_USER_ID;
+  const [userId, setUserId] = useState<string | null>(null);
   const { refresh } = useLocalSearchParams<{ refresh?: string }>();
   
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [userLoading, setUserLoading] = useState(true);
+  const [authLoading, setAuthLoading] = useState(true);
+  const productsPreloaded = useRef(false);
   
   // Get the current user's ID when component mounts
   useEffect(() => {
     const getUserId = async () => {
-      const { data } = await supabase.auth.getUser();
-      setUserId(data?.user?.id || DEMO_USER_ID);
+      try {
+        setUserLoading(true);
+        logDebug('Getting current user');
+        const user = await getCurrentUser();
+        if (user) {
+          logDebug(`User authenticated: ${user.id}`);
+          setUserId(user.id);
+        } else {
+          // If no user is authenticated, redirect to login
+          logDebug('No authenticated user, redirecting to login');
+          Alert.alert("Authentication Required", "Please login to view your cart.", 
+            [{ text: "OK", onPress: () => router.replace('/(auth)/login') }]
+          );
+        }
+      } catch (error) {
+        console.error('Error getting user:', error);
+        Alert.alert("Authentication Error", "Unable to verify your login. Please try again.",
+          [{ text: "OK", onPress: () => router.replace('/(auth)/login') }]
+        );
+      } finally {
+        setUserLoading(false);
+      }
     };
     
     getUserId();
@@ -39,26 +74,77 @@ const CartPage = () => {
     updateItemQuantity,
     removeItem,
     checkout,
-  } = useCart(userId);
+    fixMissingProducts,
+  } = useCart(userId || '');
 
   // Load cart when component mounts or when userId changes or when refresh param is present
   useEffect(() => {
-    // Force refresh the cart to get the latest data
-    loadCart(true);
-    
-    // For debugging - log the cart items
-    console.log('Cart page mounted with refresh param:', refresh);
+    if (userId) {
+      logDebug(`Loading cart for user: ${userId}, refresh: ${refresh}`);
+      // Load the cart once when userId is available or refresh param changes
+      loadCart(true).then(() => {
+        // After loading the cart, mark products as not preloaded so they can be preloaded once
+        productsPreloaded.current = false;
+      });
+    }
   }, [userId, loadCart, refresh]);
   
-  // Add another effect to force refresh when focusing the screen
+  // This is a separate useEffect just for debugging
   useEffect(() => {
-    // This will run when the component mounts
-    const loadLatestCart = async () => {
-      await loadCart(true);
-    };
-    
-    loadLatestCart();
-  }, []);
+    if (cart) {
+      logDebug(`Cart updated - ID: ${cart.id}, Items: ${cart.items.length}`);
+      if (cart.items.length > 0) {
+        logDebug('Cart items:', cart.items.map(item => ({
+          id: item.id,
+          product_id: item.product_id,
+          product_name: item.product?.name || 'Missing product',
+          quantity: item.quantity,
+          has_product: !!item.product
+        })));
+        
+        // Check for missing products and attempt to fix them
+        const missingProducts = cart.items.filter(item => !item.product);
+        if (missingProducts.length > 0) {
+          logDebug(`Found ${missingProducts.length} items with missing product data, attempting to fix...`);
+          fixMissingProducts();
+        }
+        
+        // Only preload products once to avoid infinite loading loops
+        if (!productsPreloaded.current) {
+          const preloadProducts = async () => {
+            logDebug('Preloading all product data for cart items');
+            
+            // Create a set of unique product IDs to avoid duplicate fetches
+            const productIds = new Set(cart.items.map(item => item.product_id));
+            
+            // Preload each product in parallel
+            const preloadPromises = Array.from(productIds).map(async (productId) => {
+              try {
+                const product = await preloadProduct(productId);
+                if (product) {
+                  logDebug(`Successfully preloaded product: ${product.name}`);
+                } else {
+                  logDebug(`Failed to preload product: ${productId}`);
+                }
+              } catch (error) {
+                console.error(`Error preloading product ${productId}:`, error);
+              }
+            });
+            
+            await Promise.all(preloadPromises);
+            logDebug('Finished preloading products');
+            
+            // Mark preloading as complete - don't load cart again to avoid infinite loop
+            productsPreloaded.current = true;
+          };
+          
+          preloadProducts();
+        }
+      }
+    } else {
+      logDebug('Cart is null or undefined');
+    }
+  }, [cart, fixMissingProducts]);
 
   // Calculate cart totals with useMemo to avoid unnecessary recalculations
   const { subtotal, tax, total, itemCount } = useMemo(() => {
@@ -73,6 +159,7 @@ const CartPage = () => {
 
     try {
       setIsRefreshing(true);
+      logDebug(`Updating quantity - Item ID: ${itemId}, New quantity: ${newQuantity}`);
       
       // Perform the actual update
       await updateItemQuantity(itemId, newQuantity);
@@ -91,21 +178,32 @@ const CartPage = () => {
   // Handle remove item
   const handleRemoveItem = useCallback(async (itemId: string) => {
     try {
+      setIsRefreshing(true);
+      logDebug(`Removing item - Item ID: ${itemId}`);
+      
       await removeItem(itemId);
+      
+      // Refresh cart after removing
+      await loadCart(true);
     } catch (error) {
       console.error('Failed to remove item:', error);
       Alert.alert('Error', 'Could not remove item from cart');
+    } finally {
+      setIsRefreshing(false);
     }
-  }, [removeItem]);
+  }, [removeItem, loadCart]);
 
   // Handle checkout
   const handleCheckout = useCallback(async () => {
     try {
+      logDebug('Starting checkout process');
       const success = await checkout();
       if (success) {
+        logDebug('Checkout completed successfully');
         Alert.alert('Success', 'Checkout completed successfully');
         router.push('/');
       } else {
+        logDebug('Checkout failed');
         Alert.alert('Error', 'There was an issue with checkout');
       }
     } catch (error) {
@@ -118,6 +216,9 @@ const CartPage = () => {
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
     try {
+      logDebug('Manually refreshing cart');
+      // Reset the preloaded flag to allow preloading again when refreshing manually
+      productsPreloaded.current = false; 
       await loadCart(true);
     } catch (error) {
       console.error('Error refreshing cart:', error);
@@ -125,6 +226,36 @@ const CartPage = () => {
       setIsRefreshing(false);
     }
   }, [loadCart]);
+
+  // If still loading user, show loading screen
+  if (userLoading) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <StatusBar style="dark" />
+        <View style={styles.centeredContainer}>
+          <ActivityIndicator size="large" color={Theme.colors.primary} />
+          <Text style={styles.loadingText}>Checking authentication...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // If no userId yet, show loading
+  if (!userId) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <StatusBar style="dark" />
+        <View style={styles.centeredContainer}>
+          <Text style={styles.errorTitle}>Authentication Required</Text>
+          <Button
+            title="Go to Login"
+            onPress={() => router.replace('/(auth)/login')}
+            style={styles.loginButton}
+          />
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   // Render error state
   if (error) {
@@ -142,11 +273,6 @@ const CartPage = () => {
         <View style={styles.errorContainer}>
           <Text style={styles.errorTitle}>Unable to load cart</Text>
           <Text style={styles.errorText}>{error}</Text>
-          {isDemoUser && (
-            <Text style={styles.errorDetail}>
-              For demo users, carts are stored locally on your device.
-            </Text>
-          )}
           <TouchableOpacity 
             style={styles.retryButton} 
             onPress={handleRefresh}
@@ -185,7 +311,7 @@ const CartPage = () => {
   }
 
   // Render empty cart
-  if (!cart || cart.items.length === 0) {
+  if (!cart || !cart.items || cart.items.length === 0) {
     return (
       <SafeAreaView style={styles.container}>
         <StatusBar style="dark" />
@@ -247,7 +373,7 @@ const CartPage = () => {
       >
         {cart.items.map((item) => (
           <CartItem
-            key={`${item.id}-${item.quantity}-${item.updated_at}`}
+            key={item.id}
             item={item}
             onUpdateQuantity={handleQuantityChange}
             onRemove={handleRemoveItem}
@@ -470,14 +596,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#333',
     textAlign: 'center',
-    marginBottom: 8,
-  },
-  errorDetail: {
-    fontSize: 14,
-    color: '#666',
-    textAlign: 'center',
-    marginBottom: 24,
-    paddingHorizontal: 24,
+    marginBottom: 28,
   },
   retryButton: {
     backgroundColor: '#f0eeff',
@@ -497,6 +616,10 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     padding: 16,
+  },
+  loginButton: {
+    backgroundColor: '#474472',
+    marginTop: 16,
   },
 });
 

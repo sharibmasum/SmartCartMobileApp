@@ -4,20 +4,32 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getActiveCart, addToCart, removeCartItem, updateCartItemQuantity, checkoutCart } from '../services/cart';
 import { Cart, CartItem } from '../types/cart.types';
 import { Product } from '../types/product.types';
+import { getProductById } from '../services/products';
 
-// Set this to false to suppress console errors in production
-const SHOW_DEBUG_ERRORS = false;
+// Set this to true for debugging
+const SHOW_DEBUG_ERRORS = true;
 
-// Custom logger that can be turned off in production
+// Custom logger that can be turned on/off
 const logError = (message: string, error: any) => {
   if (SHOW_DEBUG_ERRORS) {
     console.error(message, error);
   }
 };
 
+// Custom logger for debug information
+const logDebug = (message: string, data?: any) => {
+  if (SHOW_DEBUG_ERRORS) {
+    if (data) {
+      console.log(`[CartDebug] ${message}`, data);
+    } else {
+      console.log(`[CartDebug] ${message}`);
+    }
+  }
+};
+
 // Keys for AsyncStorage
-const CART_STORAGE_KEY = '@SmartCart:cartData';
-const CART_LAST_SYNC_KEY = '@SmartCart:lastSync';
+const CART_STORAGE_KEY = (userId: string) => `@SmartCart:cartData:${userId}`;
+const CART_LAST_SYNC_KEY = (userId: string) => `@SmartCart:lastSync:${userId}`;
 
 // Helper function to check if a string is a valid UUID
 function isValidUUID(uuid: string): boolean {
@@ -36,11 +48,8 @@ function generateUUID(): string {
 
 // Hook for managing cart state and operations
 export const useCart = (userId: string) => {
-  // Check if userId is valid UUID format, if not use a default one
-  const safeUserId = isValidUUID(userId) ? userId : '550e8400-e29b-41d4-a716-446655440000';
-  
-  // Check if we're using the demo user ID
-  const isDemoUser = safeUserId === '550e8400-e29b-41d4-a716-446655440000';
+  // Check if userId is valid UUID format
+  const isValidUser = isValidUUID(userId);
   
   const [cart, setCart] = useState<Cart | null>(null);
   const [loading, setLoading] = useState(true);
@@ -51,7 +60,7 @@ export const useCart = (userId: string) => {
 
   // Save cart to AsyncStorage for offline persistence
   const persistCart = useCallback(async (cartData: Cart | null) => {
-    if (!cartData) return;
+    if (!cartData || !isValidUser) return;
     
     try {
       // Store the cartId for reference
@@ -59,21 +68,23 @@ export const useCart = (userId: string) => {
         cartIdRef.current = cartData.id;
       }
       
-      await AsyncStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cartData));
+      await AsyncStorage.setItem(CART_STORAGE_KEY(userId), JSON.stringify(cartData));
       const now = new Date();
-      await AsyncStorage.setItem(CART_LAST_SYNC_KEY, now.toISOString());
+      await AsyncStorage.setItem(CART_LAST_SYNC_KEY(userId), now.toISOString());
       setLastSynced(now);
-      console.log(`Cart saved to storage: ${cartData.items.length} items`);
+      logDebug(`Cart saved to storage: ${cartData.items.length} items for user ${userId}`);
     } catch (err) {
       logError('Error saving cart to AsyncStorage:', err);
     }
-  }, []);
+  }, [userId, isValidUser]);
 
   // Load cart from AsyncStorage (for offline access)
   const loadPersistedCart = useCallback(async () => {
+    if (!isValidUser) return false;
+    
     try {
-      const storedCart = await AsyncStorage.getItem(CART_STORAGE_KEY);
-      const lastSync = await AsyncStorage.getItem(CART_LAST_SYNC_KEY);
+      const storedCart = await AsyncStorage.getItem(CART_STORAGE_KEY(userId));
+      const lastSync = await AsyncStorage.getItem(CART_LAST_SYNC_KEY(userId));
       
       if (storedCart) {
         const parsedCart = JSON.parse(storedCart) as Cart;
@@ -88,9 +99,10 @@ export const useCart = (userId: string) => {
         // Store the cartId for reference
         if (parsedCart.id) {
           cartIdRef.current = parsedCart.id;
+          logDebug(`Loaded stored cart ID: ${parsedCart.id} for user ${userId}`);
         }
         
-        console.log(`Loaded cart from storage: ${parsedCart.items.length} items`);
+        logDebug(`Loaded cart from storage: ${parsedCart.items.length} items for user ${userId}`);
       }
       
       if (lastSync) {
@@ -102,41 +114,69 @@ export const useCart = (userId: string) => {
       logError('Error loading cart from AsyncStorage:', err);
       return false;
     }
-  }, []);
+  }, [userId, isValidUser]);
+
+  // Fix missing product data in cart items
+  const fixMissingProducts = useCallback(async () => {
+    if (!cart || !cart.items || cart.items.length === 0) return;
+    
+    logDebug(`Checking for missing product data in ${cart.items.length} cart items`);
+    
+    // Track if we need to update the cart
+    let needsUpdate = false;
+    
+    // Create a new cart copy with updated items
+    const updatedCart = { ...cart };
+    
+    // Check each item for missing product data
+    for (let i = 0; i < updatedCart.items.length; i++) {
+      const item = updatedCart.items[i];
+      if (!item.product) {
+        logDebug(`Missing product for item ${item.id}, product_id: ${item.product_id}. Fetching...`);
+        
+        try {
+          // Try to fetch the product by ID
+          const product = await getProductById(item.product_id);
+          
+          if (product) {
+            logDebug(`Found product data for ${item.id}: ${product.name}`);
+            
+            // Update the item with the product data
+            updatedCart.items[i] = {
+              ...item,
+              product
+            };
+            
+            needsUpdate = true;
+          } else {
+            logDebug(`Could not find product data for ${item.id}`);
+          }
+        } catch (err) {
+          logError('Error fetching product for item:', err);
+        }
+      }
+    }
+    
+    // Update the cart state if we found any missing products
+    if (needsUpdate) {
+      logDebug(`Updating cart with fixed product data`);
+      setCart(updatedCart);
+      await persistCart(updatedCart);
+    }
+  }, [cart, persistCart]);
 
   // Load cart data from backend
   const loadCart = useCallback(async (forceRefresh = false) => {
-    if (!safeUserId) return;
+    if (!userId || !isValidUser) {
+      setError("Invalid user ID");
+      setLoading(false);
+      return;
+    }
+    
+    logDebug(`Loading cart for user ${userId} (force refresh: ${forceRefresh})`);
     
     try {
       setLoading(true);
-      
-      // For demo user, always prefer storage first
-      if (isDemoUser) {
-        const hasPersistedCart = await loadPersistedCart();
-        
-        if (!hasPersistedCart) {
-          // Create a new empty cart for demo user
-          const demoCart: Cart = {
-            id: generateUUID(),
-            user_id: safeUserId,
-            status: 'active',
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-            checkout_at: null,
-            items: []
-          };
-          
-          setCart(demoCart);
-          cartIdRef.current = demoCart.id;
-          await persistCart(demoCart);
-        }
-        
-        setError(null);
-        initialLoadDone.current = true;
-        setLoading(false);
-        return;
-      }
       
       // Try to load from AsyncStorage first if not forcing refresh
       if (!forceRefresh && !initialLoadDone.current) {
@@ -148,148 +188,86 @@ export const useCart = (userId: string) => {
           if (lastSynced > thirtyMinutesAgo) {
             setLoading(false);
             initialLoadDone.current = true;
+            logDebug("Using recent cart from AsyncStorage");
+            
+            // Fix any missing product data in the persisted cart
+            await fixMissingProducts();
             return;
           }
         }
       }
       
-      // Load from backend for authenticated users
-      const cartData = await getActiveCart(safeUserId);
+      // Load from backend
+      logDebug("Fetching cart from backend");
+      const cartData = await getActiveCart(userId);
       
       if (cartData) {
+        logDebug(`Got cart from backend, ID: ${cartData.id}, items: ${cartData.items.length}`);
         setCart(cartData);
         cartIdRef.current = cartData.id;
         // Persist to AsyncStorage
         await persistCart(cartData);
+        
+        // Check for missing product data and try to fix
+        await fixMissingProducts();
+      } else {
+        logDebug("No cart data returned from backend");
       }
       
       setError(null);
       initialLoadDone.current = true;
     } catch (err) {
       logError('Error loading cart:', err);
-      setError(isDemoUser ? null : 'Failed to load cart');
+      setError('Failed to load cart');
       
       // Fall back to persisted data if backend load fails
       if (!initialLoadDone.current) {
+        logDebug("Falling back to persisted cart after backend error");
         await loadPersistedCart();
+        
+        // Try to fix any missing product data
+        await fixMissingProducts();
       }
     } finally {
       setLoading(false);
     }
-  }, [safeUserId, persistCart, loadPersistedCart, isDemoUser]);
+  }, [userId, persistCart, loadPersistedCart, isValidUser, fixMissingProducts]);
 
   // Add product to cart
   const addProductToCart = useCallback(async (product: Product, quantity = 1) => {
-    if (!safeUserId) return null;
+    if (!userId || !isValidUser) {
+      logDebug("Cannot add to cart: Invalid user ID");
+      return null;
+    }
     
     try {
       setLoading(true);
+      logDebug(`Adding product to cart: ${product.name}, quantity: ${quantity}`);
       
-      // Validate product data and provide defaults for required fields
-      const validatedProduct: Product = {
-        id: isValidUUID(product.id) ? product.id : generateUUID(),
-        name: product.name || 'Unknown Product',
-        description: product.description || '',
-        price: typeof product.price === 'number' ? product.price : 0,
-        image_url: product.image_url || '',
-        barcode: product.barcode || '',
-        category: product.category || 'Uncategorized',
-        created_at: product.created_at || new Date().toISOString(),
-        updated_at: product.updated_at || new Date().toISOString()
-      };
+      // Try to add to database
+      const cartItem = await addToCart(userId, product, quantity);
       
-      // For demo user, handle cart locally
-      if (isDemoUser) {
-        // Make sure we have a cart
-        if (!cart) {
-          await loadCart(true); // Force refresh the cart
-          if (!cart) {
-            // If still no cart, create one
-            const newCart: Cart = {
-              id: generateUUID(),
-              user_id: safeUserId,
-              status: 'active',
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-              checkout_at: null,
-              items: []
-            };
-            setCart(newCart);
-            cartIdRef.current = newCart.id;
-            await persistCart(newCart);
-          }
-        }
+      if (cartItem) {
+        logDebug(`Successfully added item to cart, ID: ${cartItem.id}`);
         
-        if (cart) {
-          // Check if product is already in cart
-          const existingItemIndex = cart.items.findIndex(item => 
-            item.product_id === validatedProduct.id
-          );
-          
-          const updatedCart = { ...cart };
-          
-          if (existingItemIndex >= 0) {
-            // Update existing item
-            updatedCart.items[existingItemIndex].quantity += quantity;
-            updatedCart.items[existingItemIndex].updated_at = new Date().toISOString();
-            updatedCart.updated_at = new Date().toISOString();
-          } else {
-            // Add new item
-            const newItem: CartItem = {
-              id: generateUUID(),
-              product_id: validatedProduct.id,
-              cart_id: cart.id,
-              quantity,
-              product: validatedProduct,
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString()
-            };
-            updatedCart.items.push(newItem);
-            updatedCart.updated_at = new Date().toISOString();
-          }
-          
-          // Update state with the new cart
-          setCart(updatedCart);
-          
-          // Make sure to persist the updated cart immediately
-          await persistCart(updatedCart);
-          
-          // Return the added/updated item
-          const itemIndex = existingItemIndex >= 0 ? existingItemIndex : updatedCart.items.length - 1;
-          return updatedCart.items[itemIndex];
-        }
-      }
-      
-      // Regular flow for authenticated users - add to database AND local cart for resilience
-      try {
-        // Try to add to database
-        const cartItem = await addToCart(safeUserId, validatedProduct, quantity);
-        
-        // Also update local cart for resilience regardless of whether database operation succeeds
+        // Also update local cart for resilience
         if (cart) {
           try {
             // Optimistic update to local cart
             const updatedCart = { ...cart };
             const existingItemIndex = updatedCart.items.findIndex(item => 
-              item.product_id === validatedProduct.id
+              item.product_id === product.id
             );
             
             if (existingItemIndex >= 0) {
               // Update existing item
               updatedCart.items[existingItemIndex].quantity += quantity;
               updatedCart.items[existingItemIndex].updated_at = new Date().toISOString();
+              logDebug(`Updated existing item in local cart, new quantity: ${updatedCart.items[existingItemIndex].quantity}`);
             } else {
-              // Add new item (use the returned cart item if available, otherwise create a new one)
-              const newItem: CartItem = cartItem || {
-                id: generateUUID(),
-                product_id: validatedProduct.id,
-                cart_id: cart.id,
-                quantity,
-                product: validatedProduct,
-                created_at: new Date().toISOString(),
-                updated_at: new Date().toISOString()
-              };
-              updatedCart.items.push(newItem);
+              // Add the new cart item from the database
+              updatedCart.items.push(cartItem);
+              logDebug(`Added new item to local cart`);
             }
             
             updatedCart.updated_at = new Date().toISOString();
@@ -297,120 +275,63 @@ export const useCart = (userId: string) => {
             // Update state and storage without waiting for network
             setCart(updatedCart);
             await persistCart(updatedCart);
-            
-            // Return either the database item or our local item
-            return cartItem || (existingItemIndex >= 0 
-              ? updatedCart.items[existingItemIndex] 
-              : updatedCart.items[updatedCart.items.length - 1]);
           } catch (optimisticError) {
             logError('Error in optimistic update:', optimisticError);
-            return cartItem; // Still return the item if we got one from the database
           }
         } else {
-          return cartItem;
+          logDebug("No local cart to update, will refresh from server");
         }
-      } catch (databaseError) {
-        logError('Error adding to database cart:', databaseError);
-        
-        // Database operation failed, but we'll still add to local cart
-        if (cart) {
-          // Fallback to local cart
-          const updatedCart = { ...cart };
-          const existingItemIndex = updatedCart.items.findIndex(item => 
-            item.product_id === validatedProduct.id
-          );
-          
-          if (existingItemIndex >= 0) {
-            // Update existing item
-            updatedCart.items[existingItemIndex].quantity += quantity;
-            updatedCart.items[existingItemIndex].updated_at = new Date().toISOString();
-            updatedCart.updated_at = new Date().toISOString();
-            
-            // Update state and storage
-            setCart(updatedCart);
-            await persistCart(updatedCart);
-            
-            return updatedCart.items[existingItemIndex];
-          } else {
-            // Add new item
-            const newItem: CartItem = {
-              id: generateUUID(),
-              product_id: validatedProduct.id,
-              cart_id: cart.id,
-              quantity,
-              product: validatedProduct,
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString()
-            };
-            
-            updatedCart.items.push(newItem);
-            updatedCart.updated_at = new Date().toISOString();
-            
-            // Update state and storage
-            setCart(updatedCart);
-            await persistCart(updatedCart);
-            
-            return newItem;
-          }
-        }
-        
-        // If we don't have a local cart, create one with this item
-        const newCart: Cart = {
-          id: generateUUID(),
-          user_id: safeUserId,
-          status: 'active',
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          checkout_at: null,
-          items: [{
-            id: generateUUID(),
-            product_id: validatedProduct.id,
-            cart_id: generateUUID(),
-            quantity,
-            product: validatedProduct,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          }]
-        };
-        
-        setCart(newCart);
-        cartIdRef.current = newCart.id;
-        await persistCart(newCart);
-        
-        return newCart.items[0];
+      } else {
+        logDebug("Failed to add item to cart in database, server returned null");
+      }
+      
+      // Refresh cart to get the latest state from the server
+      await loadCart(true);
+      
+      return cartItem;
+    } catch (error) {
+      logError('Error adding product to cart:', error);
+      setError('Failed to add product to cart');
+      
+      // Try to create a new cart if the error might be due to missing cart
+      try {
+        logDebug("Attempting to refresh cart after error");
+        await loadCart(true);
+      } catch (refreshError) {
+        logError('Error refreshing cart after add failure:', refreshError);
       }
       
       return null;
     } finally {
       setLoading(false);
     }
-  }, [safeUserId, loadCart, cart, persistCart, isDemoUser]);
+  }, [userId, loadCart, cart, persistCart, isValidUser]);
 
   // Remove item from cart
   const removeItem = useCallback(async (cartItemId: string) => {
     try {
       setLoading(true);
+      logDebug(`Removing item from cart: ${cartItemId}`);
       
-      // For demo user, handle locally
-      if (isDemoUser && cart) {
-        const updatedCart = { ...cart };
-        updatedCart.items = updatedCart.items.filter(item => item.id !== cartItemId);
-        updatedCart.updated_at = new Date().toISOString();
-        
-        setCart(updatedCart);
-        await persistCart(updatedCart);
-        return true;
-      }
-      
-      // Regular flow for authenticated users
       const result = await removeCartItem(cartItemId);
       
       if (result) {
+        logDebug("Successfully removed item from cart");
+        // Optimistic update - remove from local cart before refresh
+        if (cart) {
+          const updatedCart = { ...cart };
+          updatedCart.items = updatedCart.items.filter(item => item.id !== cartItemId);
+          updatedCart.updated_at = new Date().toISOString();
+          setCart(updatedCart);
+          await persistCart(updatedCart);
+        }
+        
         // Refresh cart after removing item
         await loadCart(true);
         return true;
       }
       
+      logDebug("Failed to remove item from cart");
       return false;
     } catch (err) {
       setError('Failed to remove item from cart');
@@ -428,59 +349,31 @@ export const useCart = (userId: string) => {
     } finally {
       setLoading(false);
     }
-  }, [loadCart, cart, persistCart, isDemoUser]);
+  }, [loadCart, cart, persistCart]);
 
   // Update item quantity
   const updateItemQuantity = useCallback(async (cartItemId: string, quantity: number) => {
     try {
       setLoading(true);
+      logDebug(`Updating item quantity: ${cartItemId}, new quantity: ${quantity}`);
       
-      // For demo user, handle locally
-      if (isDemoUser && cart) {
+      const updatedItem = await updateCartItemQuantity(cartItemId, quantity);
+      
+      // Update the local state for immediate UI feedback
+      if (updatedItem && cart) {
         const updatedCart = { ...cart };
         const itemIndex = updatedCart.items.findIndex(item => item.id === cartItemId);
         
         if (itemIndex >= 0) {
-          if (quantity <= 0) {
-            // Remove the item if quantity is 0 or negative
-            updatedCart.items = updatedCart.items.filter(item => item.id !== cartItemId);
-          } else {
-            // Update the quantity
-            updatedCart.items[itemIndex].quantity = quantity;
-            updatedCart.items[itemIndex].updated_at = new Date().toISOString();
-          }
-          
+          // Update the quantity in the local cart
+          updatedCart.items[itemIndex].quantity = quantity;
+          updatedCart.items[itemIndex].updated_at = new Date().toISOString();
           updatedCart.updated_at = new Date().toISOString();
+          
+          // Update state and persist to storage
           setCart(updatedCart);
           await persistCart(updatedCart);
-          
-          // Return the updated item or null if removed
-          return quantity <= 0 ? null : updatedCart.items[itemIndex];
-        }
-        
-        return null;
-      }
-      
-      // Regular flow for authenticated users
-      const updatedItem = await updateCartItemQuantity(cartItemId, quantity);
-      
-      // Only refresh cart AFTER the database update is complete
-      if (updatedItem) {
-        // Also update the local state for immediate UI feedback
-        if (cart) {
-          const updatedCart = { ...cart };
-          const itemIndex = updatedCart.items.findIndex(item => item.id === cartItemId);
-          
-          if (itemIndex >= 0) {
-            // Update the quantity in the local cart
-            updatedCart.items[itemIndex].quantity = quantity;
-            updatedCart.items[itemIndex].updated_at = new Date().toISOString();
-            updatedCart.updated_at = new Date().toISOString();
-            
-            // Update state and persist to storage
-            setCart(updatedCart);
-            await persistCart(updatedCart);
-          }
+          logDebug("Updated item quantity in local cart");
         }
       }
       
@@ -516,54 +409,27 @@ export const useCart = (userId: string) => {
     } finally {
       setLoading(false);
     }
-  }, [loadCart, cart, persistCart, isDemoUser]);
+  }, [loadCart, cart, persistCart]);
 
   // Checkout and complete the cart
   const checkout = useCallback(async (paymentMethod: string = 'credit_card') => {
-    if (!cart) return false;
+    if (!cart) {
+      logDebug("Cannot checkout: No active cart");
+      return false;
+    }
     
     try {
       setLoading(true);
+      logDebug(`Starting checkout for cart: ${cart.id}`);
       
-      // For demo user, simulate checkout locally
-      if (isDemoUser) {
-        const completedCart: Cart = {
-          ...cart,
-          status: 'completed',
-          checkout_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        };
-        
-        // Clear cart storage
-        await AsyncStorage.removeItem(CART_STORAGE_KEY);
-        await AsyncStorage.removeItem(CART_LAST_SYNC_KEY);
-        
-        // Create new empty cart
-        const newCart: Cart = {
-          id: generateUUID(),
-          user_id: safeUserId,
-          status: 'active',
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          checkout_at: null,
-          items: []
-        };
-        
-        setCart(newCart);
-        cartIdRef.current = newCart.id;
-        await persistCart(newCart);
-        
-        return true;
-      }
-      
-      // Regular flow for authenticated users
       const result = await checkoutCart(cart.id, paymentMethod);
       
       if (result) {
+        logDebug("Checkout successful");
         // Clear local cart after successful checkout
         setCart(null);
-        await AsyncStorage.removeItem(CART_STORAGE_KEY);
-        await AsyncStorage.removeItem(CART_LAST_SYNC_KEY);
+        await AsyncStorage.removeItem(CART_STORAGE_KEY(userId));
+        await AsyncStorage.removeItem(CART_LAST_SYNC_KEY(userId));
         
         // Refresh to get a new active cart
         setTimeout(() => loadCart(true), 500);
@@ -571,6 +437,7 @@ export const useCart = (userId: string) => {
         return true;
       }
       
+      logDebug("Checkout failed");
       return false;
     } catch (err) {
       setError('Failed to complete checkout');
@@ -579,7 +446,7 @@ export const useCart = (userId: string) => {
     } finally {
       setLoading(false);
     }
-  }, [cart, loadCart, persistCart, safeUserId, isDemoUser]);
+  }, [cart, loadCart, persistCart, userId]);
 
   // Calculate cart totals
   const getCartTotals = useCallback(() => {
@@ -595,6 +462,7 @@ export const useCart = (userId: string) => {
     const subtotal = cart.items.reduce((acc, item) => {
       if (!item.product || typeof item.product.price !== 'number') {
         console.warn('Invalid product in cart item:', item);
+        // Skip items with missing product data instead of failing
         return acc;
       }
       return acc + (item.product.price * item.quantity);
@@ -614,28 +482,23 @@ export const useCart = (userId: string) => {
 
   // Clear the entire cart
   const clearCart = useCallback(async () => {
-    if (!cart) return false;
+    if (!cart) {
+      logDebug("Cannot clear cart: No active cart");
+      return false;
+    }
     
     try {
       setLoading(true);
+      logDebug(`Clearing cart: ${cart.id}`);
       
-      // For demo user, just clear locally
-      if (isDemoUser) {
-        const updatedCart = { 
-          ...cart, 
-          items: [],
-          updated_at: new Date().toISOString()
-        };
-        
-        setCart(updatedCart);
-        await persistCart(updatedCart);
-        return true;
-      }
-      
-      // Regular flow for authenticated users
       // Remove all items one by one from the backend
       const removePromises = cart.items.map(item => removeCartItem(item.id));
       await Promise.all(removePromises);
+      
+      // Optimistically update local cart
+      const updatedCart = { ...cart, items: [], updated_at: new Date().toISOString() };
+      setCart(updatedCart);
+      await persistCart(updatedCart);
       
       // Refresh cart
       await loadCart(true);
@@ -645,30 +508,25 @@ export const useCart = (userId: string) => {
       setError('Failed to clear cart');
       logError('Error clearing cart:', err);
       
-      // Optimistic update for offline support
-      if (cart) {
-        const updatedCart = { ...cart, items: [] };
-        setCart(updatedCart);
-        await persistCart(updatedCart);
-      }
-      
       return false;
     } finally {
       setLoading(false);
     }
-  }, [cart, loadCart, persistCart, isDemoUser]);
+  }, [cart, loadCart, persistCart]);
 
   // Sync cart with backend (can be called manually)
   const syncCart = useCallback(async () => {
+    logDebug("Manual sync requested");
     return loadCart(true);
   }, [loadCart]);
 
   // Initialize cart on component mount - only runs once
   useEffect(() => {
-    if (!initialLoadDone.current) {
+    if (!initialLoadDone.current && isValidUser) {
+      logDebug(`Initial cart load for user: ${userId}`);
       loadCart();
     }
-  }, []); // Empty dependency array ensures this only runs once
+  }, [loadCart, isValidUser, userId]); 
 
   return {
     cart,
@@ -683,5 +541,6 @@ export const useCart = (userId: string) => {
     getCartTotals,
     checkout,
     clearCart,
+    fixMissingProducts,
   };
 }; 

@@ -6,7 +6,6 @@ import { theme } from '../constants/theme';
 import { isAuthenticated, clearAllAuthTokens, supabase } from '../services/supabase';
 import { View, Text, ActivityIndicator } from 'react-native';
 import * as ScreenOrientation from 'expo-screen-orientation';
-import ImagePrefetcher from '../utils/image-prefetcher';
 
 // Set to false to stop forcing logout during development
 const FORCE_LOGOUT_ON_START = false;
@@ -74,16 +73,6 @@ export default function RootLayout() {
     return () => {
       data.subscription.unsubscribe();
     };
-  }, []);
-
-  // Inside the component, preferably in a useEffect:
-  useEffect(() => {
-    // Prefetch product images in the background
-    ImagePrefetcher.prefetchProductImages().catch(err => {
-      console.warn('Failed to prefetch images:', err);
-    });
-    
-    // Other initialization code...
   }, []);
 
   // Show loading screen while checking authentication

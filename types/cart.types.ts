@@ -16,7 +16,7 @@ export interface Cart {
   status: 'active' | 'completed' | 'cancelled';
   created_at: string;
   updated_at: string;
-  checkout_at: string | null;
+  completed_at: string | null;
   payment_method?: string;
   items: CartItem[];
 }
