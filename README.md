@@ -18,7 +18,7 @@ The app provides a superior shopping experience by:
 ## Demo
 
 Watch our application demo: [SmartCart Demo Video](https://drive.google.com/file/d/1JoovLuut6xmu3UefGn3Au9ES9P_sRl6I/view?usp=sharing)
-
+https://github.com/user-attachments/assets/a45fe29f-09d2-4792-a655-e6fb16f7414f
 ## Screenshots
 
 Below are screenshots showcasing the app's intuitive user interface:
@@ -26,11 +26,13 @@ Below are screenshots showcasing the app's intuitive user interface:
 **User authentication screen**
 <img src="https://github.com/user-attachments/assets/736c858c-d14d-43a0-8e9a-6e52e9dd68a9" alt="IMG_7101" width="500"/>
 
-
 **Item scanning and detection**
+<img src="https://github.com/user-attachments/assets/a45fe29f-09d2-4792-a655-e6fb16f7414f" alt="IMG_7101" width="500"/>
+<img src="https://github.com/user-attachments/assets/2487cccf-7a75-4a85-88a0-9bccd3c93273" alt="IMG_7101" width="500"/>
 
 **Shopping cart management with item quantities**
-**Order summary with checkout options**
+<img src="https://github.com/user-attachments/assets/7c606292-20c9-4482-bfb0-9247c7420fcd" alt="IMG_7101" width="500"/>
+
 
 ## API Setup
 
