@@ -1,4 +1,32 @@
-# SmartCart Setup Guide
+# SmartCart
+
+## Overview
+
+SmartCart is a mobile application designed to eliminate the frustration of waiting in long checkout lines. Key features include:
+
+- **Item scanning** using your smartphone camera
+- **Automatic food recognition** powered by Google Cloud Vision API
+- **Digital shopping cart** for easy management of items
+- **Seamless checkout** directly from your phone
+
+The app provides a superior shopping experience by:
+- Leveraging devices customers already own
+- Allowing shoppers to scan and checkout at their convenience
+- Completely eliminating wait times at checkout counters
+- Offering a clean and intuitive user interface
+
+## Demo
+
+Watch our application demo: [SmartCart Demo Video](https://drive.google.com/file/d/1JoovLuut6xmu3UefGn3Au9ES9P_sRl6I/view?usp=sharing)
+
+## Screenshots
+
+Below are screenshots showcasing the app's intuitive user interface:
+
+1. **Item scanning and detection**
+2. **Shopping cart management with item quantities**
+3. **Order summary with checkout options**
+4. **User authentication screen**
 
 ## API Setup
 
@@ -106,6 +134,15 @@ Follow these steps to set up the Supabase database for SmartCart:
       - Allows for using the app without authentication
       - Demo user UUID: 550e8400-e29b-41d4-a716-446655440000
 
+   8. **08_fix_cart_policies.sql** - Enhances Row Level Security and adds functionality:
+      - Adds missing columns (completed_at and payment_method) to carts table
+      - Ensures Row Level Security is properly enabled for all tables
+      - Sets up comprehensive RLS policies for carts and cart_items
+      - Creates a cart_items_with_products view for easier querying
+      - Adds utility functions:
+        - get_active_cart: Retrieves a user's active cart
+        - create_cart_item: Securely adds items to a user's cart
+
 4. **Verify Setup**:
    - In the Table Editor, confirm that the following tables exist:
      - products (with 10 sample items)
@@ -145,7 +182,8 @@ The database consists of the following main tables:
    - id (UUID, primary key)
    - user_id (UUID, foreign key to auth.users)
    - status (TEXT: 'active', 'completed', 'abandoned')
-   - created_at, updated_at, checkout_at (TIMESTAMPTZ)
+   - created_at, updated_at, checkout_at, completed_at (TIMESTAMPTZ)
+   - payment_method (VARCHAR(50))
 
 3. **cart_items**:
    - id (UUID, primary key)
